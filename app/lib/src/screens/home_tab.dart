@@ -11,6 +11,7 @@ import '../ui/theme.dart';
 import '../ui/transaction_tile.dart';
 import '../ui/widgets.dart';
 import 'bills_screens.dart';
+import 'notifications_screen.dart';
 import 'open_line.dart';
 import 'receive_sheet.dart';
 import 'send_screen.dart';
@@ -66,9 +67,15 @@ class _HomeTabState extends State<HomeTab> {
                   ),
                 ),
                 IconButton.filledTonal(
+                  key: const Key('bell'),
                   tooltip: 'Notifications',
-                  onPressed: () => showComingSoon(context, 'Notifications', Icons.notifications_none_rounded),
-                  icon: const Icon(Icons.notifications_none_rounded),
+                  onPressed: () => _go(const NotificationsScreen()),
+                  icon: Badge(
+                    isLabelVisible: shell.unread > 0,
+                    label: Text('${shell.unread > 9 ? '9+' : shell.unread}'),
+                    backgroundColor: Brand.danger,
+                    child: const Icon(Icons.notifications_none_rounded),
+                  ),
                 ),
               ],
             ),

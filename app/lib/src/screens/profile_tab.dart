@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import '../app.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import 'limits_screen.dart';
+import 'security_screens.dart';
 import 'shell_screen.dart';
 
 /// Account, security and help.
@@ -43,6 +45,11 @@ class ProfileTab extends StatelessWidget {
     final theme = Theme.of(context);
     final w = shell.wallet;
     void soon(String f, IconData i) => showComingSoon(context, f, i);
+    Future<void> go(Widget page) async {
+      await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+      await shell.refresh();
+    }
+
     return SafeArea(
       bottom: false,
       child: ListView(
@@ -84,42 +91,47 @@ class ProfileTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Brand.warning.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.workspace_premium_outlined, color: Brand.warning),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Tier 1 account. Verify your BVN or NIN to raise your limits.',
-                    style: theme.textTheme.bodyMedium,
+          if (shell.tier < 3)
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Brand.warning.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.workspace_premium_outlined, color: Brand.warning),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      shell.tier == 1
+                          ? 'Tier 1 account. Verify your BVN or NIN to raise your limits.'
+                          : 'Tier 2 account. Verify both BVN and NIN for the highest limits.',
+                      style: theme.textTheme.bodyMedium,
+                    ),
                   ),
-                ),
-                TextButton(
-                  onPressed: () => soon('Account upgrade', Icons.workspace_premium_outlined),
-                  child: const Text('Upgrade'),
-                ),
-              ],
+                  TextButton(
+                    key: const Key('upgrade'),
+                    onPressed: () => go(const LimitsScreen()),
+                    child: const Text('Upgrade'),
+                  ),
+                ],
+              ),
             ),
-          ),
           _Section('Account', [
             _Item(Icons.badge_outlined, 'Personal details', () => soon('Personal details', Icons.badge_outlined)),
-            _Item(Icons.speed_rounded, 'Limits', () => soon('Limits', Icons.speed_rounded)),
+            _Item(Icons.speed_rounded, 'Limits', () => go(const LimitsScreen()), key: const Key('limits')),
             _Item(Icons.description_outlined, 'Statements', () => soon('Statements', Icons.description_outlined)),
           ]),
           _Section('Security', [
             _Item(
               Icons.fingerprint_rounded,
-              'Fingerprint and face unlock',
-              () => soon('Biometric unlock', Icons.fingerprint_rounded),
+              'Fingerprint, face and app lock',
+              () => go(const SecurityScreen()),
+              key: const Key('security'),
             ),
-            _Item(Icons.password_rounded, 'Change PIN', () => soon('Change PIN', Icons.password_rounded)),
-            _Item(Icons.devices_rounded, 'Devices', () => soon('Device management', Icons.devices_rounded)),
+            _Item(Icons.password_rounded, 'Change PIN', () => go(const ChangePinScreen())),
+            _Item(Icons.devices_rounded, 'Phones signed in', () => go(const DevicesScreen())),
           ]),
           _Section('Help', [
             _Item(Icons.support_agent_rounded, 'Chat with us', () => soon('Support chat', Icons.support_agent_rounded)),
@@ -149,8 +161,9 @@ class ProfileTab extends StatelessWidget {
 }
 
 class _Item {
-  const _Item(this.icon, this.label, this.onTap);
+  const _Item(this.icon, this.label, this.onTap, {this.key});
 
+  final Key? key;
   final IconData icon;
   final String label;
   final VoidCallback onTap;
@@ -178,6 +191,7 @@ class _Section extends StatelessWidget {
               for (var i = 0; i < items.length; i++) ...[
                 if (i > 0) const Divider(indent: 56),
                 ListTile(
+                  key: items[i].key,
                   leading: Icon(items[i].icon, color: theme.colorScheme.primary),
                   title: Text(items[i].label, style: theme.textTheme.titleSmall),
                   trailing: const Icon(Icons.chevron_right_rounded),

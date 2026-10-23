@@ -187,4 +187,75 @@ void main() {
     );
     expect((jsonDecode(requests.last.body) as Map).containsKey('plan_code'), isFalse);
   });
+
+  test('security calls: device name on sign-in, KYC, notifications, devices', () async {
+    final api = HttpAvoraApi(
+      baseUrl: Uri.parse('https://api.example.test'),
+      credentials: creds,
+      deviceName: 'Tecno Spark 20',
+      client: MockClient((r) async {
+        requests.add(r);
+        return switch ('${r.method} ${r.url.path}') {
+          'POST /v1/auth/verify' => json({'token': 'tok', 'user_id': 1, 'wallet_id': 7}),
+          'POST /v1/me/kyc' => json({
+            'tier': 2,
+            'bvn_verified': true,
+            'nin_verified': false,
+            'limits': {},
+            'tiers': [
+              {'tier': 1, 'daily_send': 5000000, 'max_balance': 30000000, 'needs': 'Phone number'},
+              {'tier': 2, 'daily_send': 20000000, 'max_balance': 50000000, 'needs': 'BVN or NIN'},
+            ],
+          }),
+          'GET /v1/me/notifications' => json({
+            'notifications': [
+              {
+                'id': 3,
+                'kind': 'money_in',
+                'title': '₦5,000.00 received',
+                'body': 'From ADA OBI',
+                'ref': 's1',
+                'created_at': '2026-10-23T09:00:00Z',
+                'read_at': null,
+              },
+            ],
+            'unread': 1,
+          }),
+          'GET /v1/me/devices' => json({
+            'devices': [
+              {
+                'id': 1,
+                'name': 'Tecno Spark 20',
+                'bound_at': '2026-10-01T09:00:00Z',
+                'this_phone': true,
+                'signed_in': true,
+              },
+            ],
+          }),
+          _ => http.Response('', 204),
+        };
+      }),
+    );
+    requests = [];
+
+    await api.verify(challengeId: 'c', code: '123456', pin: '135790');
+    expect(requests.last.headers['X-Device-Name'], 'Tecno Spark 20');
+
+    final k = await api.verifyKyc(kind: 'bvn', number: '22212345671');
+    expect(jsonDecode(requests.last.body), {'type': 'bvn', 'number': '22212345671'});
+    expect(k.limits.dailySend, 20000000);
+
+    final (items, unread) = await api.notifications();
+    expect(items.single.read, isFalse);
+    expect(unread, 1);
+    await api.markNotificationsRead();
+    expect(requests.last.url.path, '/v1/me/notifications/read');
+
+    expect((await api.devices()).single.thisPhone, isTrue);
+    await api.removeDevice(4);
+    expect('${requests.last.method} ${requests.last.url.path}', 'DELETE /v1/me/devices/4');
+
+    await api.changePin(oldPin: '135790', newPin: '246810');
+    expect(jsonDecode(requests.last.body), {'old_pin': '135790', 'new_pin': '246810'});
+  });
 }

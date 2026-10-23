@@ -21,6 +21,8 @@ class ShellScreenState extends State<ShellScreen> {
   final _savings = GlobalKey<SavingsTabState>();
   Wallet? wallet;
   List<StatementLine> lines = const [];
+  int unread = 0;
+  int tier = 1;
   bool loading = true;
   Object? error;
 
@@ -34,10 +36,15 @@ class ShellScreenState extends State<ShellScreen> {
     final api = AppScope.of(context).api;
     try {
       final results = await Future.wait([api.wallet(), api.statement()]);
+      // The bell and the tier are extras; the wallet still shows without them.
+      final unreadNow = await api.notifications().then((n) => n.$2, onError: (_) => unread);
+      final tierNow = await api.kycStatus().then((s) => s.tier, onError: (_) => tier);
       if (!mounted) return;
       setState(() {
         wallet = results[0] as Wallet;
         lines = results[1] as List<StatementLine>;
+        unread = unreadNow;
+        tier = tierNow;
         error = null;
         loading = false;
       });

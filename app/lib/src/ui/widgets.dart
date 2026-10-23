@@ -106,13 +106,22 @@ class InitialsAvatar extends StatelessWidget {
   }
 }
 
-/// A 3x4 number pad. [extra] fills the bottom-left key (e.g. "." for amounts).
+/// A 3x4 number pad. [extra] fills the bottom-left key (e.g. "." for
+/// amounts), or [extraIcon] does (e.g. a fingerprint).
 class NumberPad extends StatelessWidget {
-  const NumberPad({super.key, required this.onDigit, required this.onBackspace, this.extra, this.onExtra});
+  const NumberPad({
+    super.key,
+    required this.onDigit,
+    required this.onBackspace,
+    this.extra,
+    this.extraIcon,
+    this.onExtra,
+  });
 
   final ValueChanged<String> onDigit;
   final VoidCallback onBackspace;
   final String? extra;
+  final IconData? extraIcon;
   final VoidCallback? onExtra;
 
   @override
@@ -128,7 +137,18 @@ class NumberPad extends StatelessWidget {
         for (final row in rows) Row(children: [for (final d in row) _key(context, d, () => onDigit(d))]),
         Row(
           children: [
-            extra == null ? const Expanded(child: SizedBox(height: 64)) : _key(context, extra!, onExtra),
+            if (extraIcon != null)
+              Expanded(
+                child: _Tap(
+                  key: const Key('key-extra'),
+                  onTap: onExtra,
+                  child: Icon(extraIcon, size: 30, color: Theme.of(context).colorScheme.primary),
+                ),
+              )
+            else if (extra != null)
+              _key(context, extra!, onExtra)
+            else
+              const Expanded(child: SizedBox(height: 64)),
             _key(context, '0', () => onDigit('0')),
             Expanded(
               child: _Tap(

@@ -531,9 +531,22 @@ class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
       _error = null;
     });
     if (_pin.length < 6) return;
+    await _approve(_pin);
+  }
+
+  /// Asks for a fingerprint or face instead of the PIN, when that's on.
+  Future<void> _biometrics() async {
+    if (_sending) return;
+    final pin = await AppScope.of(context).security.pinByBiometrics('Approve ${widget.headline}');
+    if (pin == null || !mounted) return;
+    setState(() => _pin = pin);
+    await _approve(pin);
+  }
+
+  Future<void> _approve(String pin) async {
     setState(() => _sending = true);
     try {
-      final result = await widget.action(_pin, _key);
+      final result = await widget.action(pin, _key);
       if (mounted) Navigator.of(context).pop(result);
     } catch (e) {
       if (!mounted) return;
@@ -588,7 +601,14 @@ class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
         ),
       ],
       const SizedBox(height: 20),
-      PrimaryButton(key: const Key('confirm'), label: 'Confirm', onPressed: () => setState(() => _askPin = true)),
+      PrimaryButton(
+        key: const Key('confirm'),
+        label: 'Confirm',
+        onPressed: () {
+          setState(() => _askPin = true);
+          if (AppScope.of(context).security.biometricsOn) _biometrics();
+        },
+      ),
     ],
   );
 
@@ -622,6 +642,8 @@ class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
         onBackspace: () {
           if (_pin.isNotEmpty && !_sending) setState(() => _pin = _pin.substring(0, _pin.length - 1));
         },
+        extraIcon: AppScope.of(context).security.biometricsOn ? Icons.fingerprint_rounded : null,
+        onExtra: _biometrics,
       ),
     ],
   );
