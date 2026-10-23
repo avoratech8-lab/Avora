@@ -1,0 +1,130 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import '../credentials.dart';
+import 'api.dart';
+import 'models.dart';
+
+class HttpAvoraApi implements AvoraApi {
+  HttpAvoraApi({required this.baseUrl, required this.credentials, http.Client? client})
+    : _client = client ?? http.Client();
+
+  final Uri baseUrl;
+  final Credentials credentials;
+  final http.Client _client;
+
+  @override
+  bool get isDemo => false;
+
+  Future<dynamic> _call(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String>? query,
+    Map<String, String>? headers,
+  }) async {
+    final uri = baseUrl.replace(path: '${baseUrl.path}$path', queryParameters: query);
+    final req = http.Request(method, uri)
+      ..headers['X-Device-ID'] = credentials.deviceId
+      ..headers['Accept'] = 'application/json';
+    final token = credentials.token;
+    if (token != null) req.headers['Authorization'] = 'Bearer $token';
+    if (headers != null) req.headers.addAll(headers);
+    if (body != null) {
+      req.headers['Content-Type'] = 'application/json';
+      req.body = jsonEncode(body);
+    }
+
+    final http.Response resp;
+    try {
+      resp = await http.Response.fromStream(await _client.send(req).timeout(const Duration(seconds: 30)));
+    } on TimeoutException {
+      throw ApiException('network', 'The network is slow. Check your connection and try again.');
+    } on http.ClientException {
+      throw ApiException('network', 'No connection. Check your internet and try again.');
+    }
+
+    final decoded = resp.body.isEmpty ? null : jsonDecode(resp.body);
+    if (resp.statusCode >= 200 && resp.statusCode < 300) return decoded;
+
+    final err = decoded is Map<String, dynamic> ? decoded['error'] as Map<String, dynamic>? : null;
+    final e = ApiException(
+      err?['code'] as String? ?? 'unknown',
+      err?['message'] as String? ?? 'Something went wrong. Please try again.',
+      status: resp.statusCode,
+    );
+    if (e.isUnauthorized) await credentials.setToken(null);
+    throw e;
+  }
+
+  @override
+  Future<String> startOtp(String phone) async {
+    final j = await _call('POST', '/v1/auth/otp', body: {'phone': phone});
+    return j['challenge_id'] as String;
+  }
+
+  @override
+  Future<Session> verify({required String challengeId, required String code, required String pin}) async {
+    final j = await _call('POST', '/v1/auth/verify', body: {'challenge_id': challengeId, 'code': code, 'pin': pin});
+    final s = Session.fromJson(j as Map<String, dynamic>);
+    await credentials.setToken(s.token);
+    return s;
+  }
+
+  @override
+  Future<Wallet> wallet() async => Wallet.fromJson(await _call('GET', '/v1/me/wallet'));
+
+  @override
+  Future<List<StatementLine>> statement() async {
+    final j = await _call('GET', '/v1/me/statement', query: {'limit': '50'});
+    return (j['lines'] as List).map((l) => StatementLine.fromJson(l as Map<String, dynamic>)).toList();
+  }
+
+  @override
+  Future<String> nameEnquiry({required String bankCode, required String accountNumber}) async {
+    final j = await _call('POST', '/v1/name-enquiry', body: {'bank_code': bankCode, 'account_number': accountNumber});
+    return j['account_name'] as String;
+  }
+
+  @override
+  Future<Quote> quote(int amount) async =>
+      Quote.fromJson(await _call('GET', '/v1/transfers/quote', query: {'amount': '$amount'}));
+
+  @override
+  Future<Transfer> send({
+    required String bankCode,
+    required String accountNumber,
+    required int amount,
+    required String narration,
+    required String pin,
+    required String idempotencyKey,
+  }) async {
+    final j = await _call(
+      'POST',
+      '/v1/transfers',
+      body: {
+        'bank_code': bankCode,
+        'account_number': accountNumber,
+        'amount': amount,
+        'narration': narration,
+        'pin': pin,
+      },
+      headers: {'Idempotency-Key': idempotencyKey},
+    );
+    return Transfer.fromJson(j as Map<String, dynamic>);
+  }
+
+  @override
+  Future<Transfer> transfer(String id) async => Transfer.fromJson(await _call('GET', '/v1/transfers/$id'));
+
+  @override
+  Future<void> logout() async {
+    try {
+      await _call('POST', '/v1/auth/logout');
+    } finally {
+      await credentials.setToken(null);
+    }
+  }
+}

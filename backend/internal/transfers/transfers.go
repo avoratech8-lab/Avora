@@ -217,14 +217,8 @@ func (s *Service) hold(ctx context.Context, req InitiateRequest, name string) (T
 	return t, true, tx.Commit(ctx)
 }
 
-func (s *Service) fee(ctx context.Context, tx pgx.Tx, walletID int64) (int64, error) {
-	now := s.now().UTC()
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	var used int
-	err := tx.QueryRow(ctx, `
-		select count(*) from transfers
-		where wallet_account_id = $1 and created_at >= $2 and status <> 'refunded'`,
-		walletID, monthStart).Scan(&used)
+func (s *Service) fee(ctx context.Context, db ledger.DB, walletID int64) (int64, error) {
+	used, err := s.usedThisMonth(ctx, db, walletID)
 	if err != nil {
 		return 0, err
 	}
@@ -232,6 +226,42 @@ func (s *Service) fee(ctx context.Context, tx pgx.Tx, walletID int64) (int64, er
 		return 0, nil
 	}
 	return s.cfg.InterbankFee, nil
+}
+
+func (s *Service) usedThisMonth(ctx context.Context, db ledger.DB, walletID int64) (int, error) {
+	now := s.now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	var used int
+	err := db.QueryRow(ctx, `
+		select count(*) from transfers
+		where wallet_account_id = $1 and created_at >= $2 and status <> 'refunded'`,
+		walletID, monthStart).Scan(&used)
+	return used, err
+}
+
+type Quote struct {
+	Amount            int64 `json:"amount"`
+	Fee               int64 `json:"fee"`
+	Total             int64 `json:"total"`
+	FreeTransfersLeft int   `json:"free_transfers_left"`
+}
+
+// Quote shows the fee a transfer would cost right now, so the app can
+// show the total before the customer confirms.
+func (s *Service) Quote(ctx context.Context, walletID, amount int64) (Quote, error) {
+	if amount <= 0 {
+		return Quote{}, fmt.Errorf("%w: amount must be positive", ErrInvalid)
+	}
+	used, err := s.usedThisMonth(ctx, s.db, walletID)
+	if err != nil {
+		return Quote{}, err
+	}
+	q := Quote{Amount: amount, FreeTransfersLeft: max(0, s.cfg.FreeTransfersPerMonth-used)}
+	if q.FreeTransfersLeft == 0 {
+		q.Fee = s.cfg.InterbankFee
+	}
+	q.Total = q.Amount + q.Fee
+	return q, nil
 }
 
 func (s *Service) dispatch(ctx context.Context, t Transfer) (Transfer, error) {

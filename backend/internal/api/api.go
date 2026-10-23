@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/me/statement", s.signedIn(s.statement))
 	mux.HandleFunc("POST /v1/name-enquiry", s.signedIn(s.nameEnquiry))
 	mux.HandleFunc("POST /v1/transfers", s.signedIn(s.createTransfer))
+	mux.HandleFunc("GET /v1/transfers/quote", s.signedIn(s.quoteTransfer))
 	mux.HandleFunc("GET /v1/transfers/{id}", s.signedIn(s.getTransfer))
 
 	mux.HandleFunc("POST /v1/webhooks/inbound-credit", s.inboundCredit)
@@ -233,6 +234,20 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 }
 
 var lagos = time.FixedZone("WAT", 60*60)
+
+func (s *Server) quoteTransfer(w http.ResponseWriter, r *http.Request) {
+	amount, err := strconv.ParseInt(r.URL.Query().Get("amount"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "amount must be a whole number of kobo")
+		return
+	}
+	q, err := s.Transfers.Quote(r.Context(), principal(r).WalletID, amount)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, q)
+}
 
 func (s *Server) getTransfer(w http.ResponseWriter, r *http.Request) {
 	t, err := s.Transfers.Get(r.Context(), r.PathValue("id"))

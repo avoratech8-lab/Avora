@@ -158,6 +158,11 @@ func TestSignUpFundAndTransfer(t *testing.T) {
 		t.Fatalf("name enquiry: %d %v", code, ne)
 	}
 
+	code, q := ada.call("GET", "/v1/transfers/quote?amount=500000", nil, nil)
+	if code != http.StatusOK || q["fee"] != float64(10_00) || q["total"] != float64(5_010_00) {
+		t.Fatalf("quote: %d %v", code, q)
+	}
+
 	body := map[string]any{"bank_code": "058", "account_number": "0123456781", "amount": 5_000_00, "pin": "000001"}
 	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "t1"}); code != http.StatusUnauthorized {
 		t.Errorf("wrong PIN: %d %v", code, e)

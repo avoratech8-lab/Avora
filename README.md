@@ -2,7 +2,7 @@
 
 A Nigerian money app built on one promise: your money never gets lost. Transfers that don't go through are refunded automatically, and every fee is shown before you pay.
 
-This repository holds the first version of the backend. The mobile app (Flutter) comes next.
+This repository holds the backend (`backend/`, Go) and the Android app (`app/`, Flutter).
 
 ## What works today
 
@@ -41,9 +41,27 @@ This repository holds the first version of the backend. The mobile app (Flutter)
 - A real partner bank rail (TAJBank or a BaaS provider) in place of the sandbox.
 - KYC tiers and transaction limits.
 - Bills, savings and support cases.
-- The mobile app.
+- A release build of the app (signing key, icon, Play Store listing).
 
-## Run it
+## The app
+
+The Flutter app covers sign-up, the home screen (balance, account number, recent activity), sending money with live status, and transfer details with the session ID.
+
+It runs in two modes:
+
+- **Demo mode** (the default). No server needed and no real money. The sign-in code is `000000`, you start with ₦50,000 of demo money, and account numbers follow the sandbox table above.
+- **Connected.** Build with `--dart-define=AVORA_API_URL=https://your-server` to talk to the backend.
+
+Every pull request builds a demo APK. Open the **app** check on the pull request, then **Summary**, and download `avora-demo-apk` to install it on an Android phone.
+
+```sh
+cd app
+flutter test
+flutter run                                              # demo mode
+flutter run --dart-define=AVORA_API_URL=http://10.0.2.2:8080   # Android emulator to a local backend
+```
+
+## Run the backend
 
 Requires Go 1.24 and Docker.
 
