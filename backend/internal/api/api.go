@@ -32,6 +32,7 @@ import (
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/notify"
+	"avora/backend/internal/p2p"
 	"avora/backend/internal/rails"
 	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
@@ -49,6 +50,7 @@ type Server struct {
 	Savings       *savings.Service
 	KYC           *kyc.Service
 	Referrals     *referrals.Service
+	P2P           *p2p.Service
 	Support       *support.Service
 	Auth          *auth.Service
 	WebhookSecret string
@@ -82,6 +84,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/me/kyc", s.signedIn(s.verifyKYC))
 	mux.HandleFunc("GET /v1/me/notifications", s.signedIn(s.listNotifications))
 	mux.HandleFunc("POST /v1/me/notifications/read", s.signedIn(s.readNotifications))
+	mux.HandleFunc("GET /v1/me/profile", s.signedIn(s.getProfile))
+	mux.HandleFunc("PATCH /v1/me/profile", s.signedIn(s.updateProfile))
+	mux.HandleFunc("GET /v1/p2p/find", s.signedIn(s.findPerson))
+	mux.HandleFunc("POST /v1/p2p", s.signedIn(s.sendP2P))
+	mux.HandleFunc("GET /v1/p2p/{id}", s.signedIn(s.getP2P))
 	mux.HandleFunc("GET /v1/me/referrals", s.signedIn(s.referralSummary))
 	mux.HandleFunc("POST /v1/me/referrals", s.signedIn(s.joinReferral))
 	mux.HandleFunc("GET /v1/help/articles", s.helpArticles)
@@ -204,6 +211,32 @@ func (s *Server) statement(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	// Avora-to-Avora lines say who the other person is, from each side.
+	if s.P2P != nil {
+		var ids []string
+		for _, l := range lines {
+			if l.Kind == "p2p" {
+				ids = append(ids, l.Ref)
+			}
+		}
+		names, err := s.P2P.Describe(r.Context(), principal(r).WalletID, ids)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		for i, l := range lines {
+			if l.Kind != "p2p" {
+				continue
+			}
+			lines[i].Kind = "p2p_out"
+			if l.Amount > 0 {
+				lines[i].Kind = "p2p_in"
+			}
+			if n, ok := names[l.Ref]; ok {
+				lines[i].Description = n
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"lines": lines})
 }
 
@@ -274,7 +307,11 @@ func (s *Server) withinLimits(w http.ResponseWriter, r *http.Request, p auth.Pri
 			return sent, err
 		}
 		paid, err := s.Bills.SpentSince(ctx, p.WalletID, t)
-		return sent + paid, err
+		if err != nil || s.P2P == nil {
+			return sent + paid, err
+		}
+		toAvora, err := s.P2P.SentSince(ctx, p.WalletID, t)
+		return sent + paid + toAvora, err
 	}
 
 	if s.KYC != nil {
@@ -403,6 +440,82 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": ns, "unread": unread})
+}
+
+func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
+	p, err := s.P2P.Profile(r.Context(), principal(r).UserID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Tag  string `json:"tag"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	p, err := s.P2P.UpdateProfile(r.Context(), principal(r).UserID, body.Name, body.Tag)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) findPerson(w http.ResponseWriter, r *http.Request) {
+	p, err := s.P2P.Find(r.Context(), principal(r).UserID, r.URL.Query().Get("q"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) sendP2P(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		To     string `json:"to"`
+		Amount int64  `json:"amount"`
+		Note   string `json:"note"`
+		PIN    string `json:"pin"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	p := principal(r)
+	if err := s.Auth.CheckPIN(r.Context(), p.UserID, body.PIN); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !s.withinLimits(w, r, p, body.Amount) {
+		return
+	}
+	t, err := s.P2P.Send(r.Context(), p2p.SendRequest{
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+		FromUserID:     p.UserID,
+		FromWallet:     p.WalletID,
+		To:             body.To,
+		Amount:         body.Amount,
+		Note:           body.Note,
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) getP2P(w http.ResponseWriter, r *http.Request) {
+	t, err := s.P2P.Get(r.Context(), principal(r).WalletID, r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
 }
 
 func (s *Server) referralSummary(w http.ResponseWriter, r *http.Request) {
@@ -736,6 +849,16 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "insufficient_funds", "Your balance is too low for this payment, including any fee.")
 	case errors.Is(err, kyc.ErrMismatch):
 		writeError(w, http.StatusUnprocessableEntity, "kyc_mismatch", "Those details don't match the records. Check the number and try again.")
+	case errors.Is(err, p2p.ErrNotFound):
+		writeError(w, http.StatusNotFound, "person_not_found", "No Avora customer has that tag or phone number.")
+	case errors.Is(err, p2p.ErrSelf):
+		writeError(w, http.StatusBadRequest, "self", "That's you. Pick someone else.")
+	case errors.Is(err, p2p.ErrTagTaken):
+		writeError(w, http.StatusConflict, "tag_taken", "That tag is taken. Try another.")
+	case errors.Is(err, p2p.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request", friendly(err))
+	case errors.Is(err, p2p.ErrIdempotencyConflict):
+		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
 	case errors.Is(err, referrals.ErrUnknownCode):
 		writeError(w, http.StatusNotFound, "unknown_code", "We don't recognise that invite code. Check it and try again.")
 	case errors.Is(err, referrals.ErrOwnCode):

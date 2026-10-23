@@ -22,6 +22,7 @@ import (
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
+	"avora/backend/internal/p2p"
 	"avora/backend/internal/rails"
 	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
@@ -88,6 +89,7 @@ func run(log *slog.Logger) error {
 		KYC:           kycSvc,
 		Referrals:     refSvc,
 		Support:       support.NewService(pool),
+		P2P:           p2p.NewService(pool),
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,
