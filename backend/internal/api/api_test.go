@@ -20,6 +20,7 @@ import (
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
 	"avora/backend/internal/kyc"
+	"avora/backend/internal/p2p"
 	"avora/backend/internal/rails"
 	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
@@ -84,6 +85,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 		KYC:       k,
 		Referrals: ref,
 		Support:   support.NewService(pool),
+		P2P:       p2p.NewService(pool),
 		DB:        pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
@@ -575,6 +577,84 @@ func TestSupportChatBotAndAgent(t *testing.T) {
 	}
 	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
 	if first := n["notifications"].([]any)[0].(map[string]any); first["title"] != "Support replied" {
+		t.Errorf("notification = %v", first)
+	}
+}
+
+func TestAvoraTagsAndFreeInstantTransfers(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 20_000_00)
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08021234567", "593816")
+
+	if c, e := ada.call("PATCH", "/v1/me/profile", map[string]string{"name": "Ada  Obi", "tag": "@Ada_O"}, nil); c != http.StatusOK ||
+		e["tag"] != "ada_o" || e["name"] != "Ada Obi" {
+		t.Fatalf("profile: %d %v", c, e)
+	}
+	if c, _ := bola.call("PATCH", "/v1/me/profile", map[string]string{"tag": "ada_o"}, nil); c != http.StatusConflict {
+		t.Errorf("taken tag: %d", c)
+	}
+	if c, _ := bola.call("PATCH", "/v1/me/profile", map[string]string{"tag": "support"}, nil); c != http.StatusConflict {
+		t.Errorf("reserved tag: %d", c)
+	}
+	if c, _ := bola.call("PATCH", "/v1/me/profile", map[string]string{"tag": "9x"}, nil); c != http.StatusBadRequest {
+		t.Errorf("bad tag: %d", c)
+	}
+	bola.call("PATCH", "/v1/me/profile", map[string]string{"name": "Bola", "tag": "bola"}, nil)
+
+	if c, p := ada.call("GET", "/v1/p2p/find?q=%40BOLA", nil, nil); c != http.StatusOK || p["name"] != "Bola" || p["phone"] != "0802 *** 4567" {
+		t.Fatalf("find by tag: %d %v", c, p)
+	}
+	if c, p := ada.call("GET", "/v1/p2p/find?q=0802+123+4567", nil, nil); c != http.StatusOK || p["tag"] != "bola" {
+		t.Fatalf("find by phone: %d %v", c, p)
+	}
+	if c, _ := ada.call("GET", "/v1/p2p/find?q=%40nobody", nil, nil); c != http.StatusNotFound {
+		t.Errorf("unknown: %d", c)
+	}
+	if c, _ := ada.call("GET", "/v1/p2p/find?q=%40ada_o", nil, nil); c != http.StatusBadRequest {
+		t.Errorf("self: %d", c)
+	}
+
+	body := map[string]any{"to": "@bola", "amount": 5_000_00, "note": "Suya", "pin": "482915"}
+	key := map[string]string{"Idempotency-Key": "p1"}
+	c, tr := ada.call("POST", "/v1/p2p", body, key)
+	if c != http.StatusOK || tr["direction"] != "out" {
+		t.Fatalf("send: %d %v", c, tr)
+	}
+	if _, again := ada.call("POST", "/v1/p2p", body, key); again["id"] != tr["id"] {
+		t.Errorf("retry sent twice: %v", again["id"])
+	}
+	body["amount"] = 1_000_000_00
+	if c, _ := ada.call("POST", "/v1/p2p", body, map[string]string{"Idempotency-Key": "p2"}); c != http.StatusForbidden {
+		t.Errorf("over the daily limit: %d", c)
+	}
+	body["amount"] = 20_000_00
+	if c, _ := ada.call("POST", "/v1/p2p", body, map[string]string{"Idempotency-Key": "p3"}); c != http.StatusUnprocessableEntity {
+		t.Errorf("not enough money: %d", c)
+	}
+
+	// Free and instant: Ada paid exactly ₦5,000 (her ₦20,000 credit had ₦50 EMTL), Bola has it already.
+	if _, w := ada.call("GET", "/v1/me/wallet", nil, nil); w["balance"] != float64(14_950_00) {
+		t.Errorf("ada balance = %v", w["balance"])
+	}
+	if _, w := bola.call("GET", "/v1/me/wallet", nil, nil); w["balance"] != float64(5_000_00) {
+		t.Errorf("bola balance = %v", w["balance"])
+	}
+	_, st := bola.call("GET", "/v1/me/statement", nil, nil)
+	if l := st["lines"].([]any)[0].(map[string]any); l["kind"] != "p2p_in" || l["description"] != "From Ada Obi (@ada_o)" {
+		t.Errorf("bola's line = %v", l)
+	}
+	_, st = ada.call("GET", "/v1/me/statement", nil, nil)
+	if l := st["lines"].([]any)[0].(map[string]any); l["kind"] != "p2p_out" || l["description"] != "To Bola (@bola)" {
+		t.Errorf("ada's line = %v", l)
+	}
+	if c, got := bola.call("GET", "/v1/p2p/"+tr["id"].(string), nil, nil); c != http.StatusOK || got["direction"] != "in" || got["note"] != "Suya" {
+		t.Errorf("bola's receipt: %d %v", c, got)
+	}
+	_, n := bola.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["body"] != "From Ada Obi (@ada_o): Suya" {
 		t.Errorf("notification = %v", first)
 	}
 }

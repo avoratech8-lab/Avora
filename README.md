@@ -17,6 +17,7 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - **Bills.** Airtime, data, electricity and TV through `GET /v1/bills/billers`, `POST /v1/bills/validate` and `POST /v1/bills/payments` (PIN and `Idempotency-Key` required). The money is held, then settled, or refunded in full if the biller declines. Bills count toward the new-phone limit.
 - **Savings.** Non-interest (mudarabah) pots, each its own ledger account: `GET/POST /v1/savings`, `POST /v1/savings/{id}/deposit` and `/withdraw`. Profit is shared after each month at the rate the partner bank declares: `POST /v1/ops/savings/profit` with `{"period": "2026-10", "goal_rate_bps": 800, "locked_rate_bps": 1200}` (each month once). Expected rates (8% goals; 10 to 16% locked) are placeholders until the bank publishes its profit-sharing ratios.
 - **KYC tiers and limits.** Phone-only accounts are Tier 1 (₦50,000 a day, ₦300,000 balance). A verified BVN or NIN gives Tier 2 (₦200,000 a day, ₦500,000 balance), and both give Tier 3 (₦5,000,000 a day, no balance cap). Transfers and bills since midnight Lagos time count toward the daily limit. `GET/POST /v1/me/kyc`; only the last 4 digits of an ID are kept. The tier amounts follow the published CBN tiers and must be confirmed with the partner bank. Sandbox: any 11-digit number is accepted except ones ending in 0.
+- **Avora tags and free instant transfers.** Each customer can claim a tag like `@ada` (3 to 20 letters, numbers or `_`, starting with a letter; names like `@avora` and `@support` are reserved). Sending to another Avora customer by tag or phone number is one ledger journal between two wallets: free, instant, and it can't get stuck at another bank. The PIN and an `Idempotency-Key` are required, the payment counts toward the daily limit, and the person paid gets a notification. Phone numbers are masked in lookups.
 - **Security settings.** Change PIN (`POST /v1/me/pin`, which signs out other phones), check the PIN to unlock the app (`POST /v1/me/pin/verify`), and list or remove phones (`GET /v1/me/devices`, `DELETE /v1/me/devices/{id}`). The app sends `X-Device-Name` at sign-in so phones have names.
 - **Notifications.** Money received, transfers delivered, refunded or under review, bill refunds, new phone sign-ins, PIN changes and tier upgrades: `GET /v1/me/notifications` and `POST /v1/me/notifications/read`.
 - **Referrals.** Each customer gets an invite code (`GET /v1/me/referrals`). A friend can add it within 30 days of joining (`POST /v1/me/referrals`). When that friend first reaches Tier 2, the inviter is paid ₦500 from `system:referral_rewards`, once per friend. The amount is a placeholder until marketing sets a budget.
@@ -59,6 +60,7 @@ The Flutter app covers:
 
 - **Sign-up and sign-in:** phone number, code boxes, and a PIN on a number pad.
 - **Home:** balance card (hideable), account number to copy or share, quick actions, "Send again" for saved recipients, and recent activity.
+- **Send to Avora:** type an @tag or phone number, see who it is, and send for free. It arrives instantly with a receipt on both sides. A card on Home asks you to claim your own tag.
 - **Send money:** searchable bank list, automatic name check, a big amount pad, a review screen showing the fee, and PIN approval.
 - **Airtime, data, electricity and TV:** all networks, the main DisCos (the meter name is checked and a token issued), and DStv, GOtv and StarTimes packages.
 - **Receipts:** live status for every payment and receipts you can share. They show the session ID for transfers and the token for electricity.
@@ -133,6 +135,11 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | POST | `/v1/me/kyc` | `{"type": "bvn" or "nin", "number"}` |
 | GET | `/v1/me/notifications` | Latest notifications and the unread count |
 | POST | `/v1/me/notifications/read` | Mark all as read |
+| GET | `/v1/me/profile` | My name, @tag, phone and account number |
+| PATCH | `/v1/me/profile` | `{"name", "tag"}`: set my name or claim a tag |
+| GET | `/v1/p2p/find?q=` | Find an Avora customer by @tag or phone |
+| POST | `/v1/p2p` | `{"to", "amount", "note", "pin"}` + `Idempotency-Key`: free instant transfer |
+| GET | `/v1/p2p/{id}` | One Avora transfer |
 | GET | `/v1/me/referrals` | My invite code and rewards |
 | POST | `/v1/me/referrals` | `{"code"}`: the code I was invited with |
 | GET | `/v1/help/articles` | Help centre articles |

@@ -10,9 +10,11 @@ import '../recipients.dart';
 import '../ui/theme.dart';
 import '../ui/transaction_tile.dart';
 import '../ui/widgets.dart';
+import 'avora_pay_screens.dart';
 import 'bills_screens.dart';
 import 'invite_screen.dart';
 import 'notifications_screen.dart';
+import 'profile_screen.dart';
 import 'open_line.dart';
 import 'receive_sheet.dart';
 import 'send_screen.dart';
@@ -28,8 +30,6 @@ class HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<HomeTab> {
-  bool _hide = false;
-
   ShellScreenState get shell => widget.shell;
 
   Future<void> _go(Widget page) async {
@@ -93,27 +93,29 @@ class _HomeTabState extends State<HomeTab> {
             else if (wallet == null)
               _LoadError(onRetry: shell.refresh)
             else
-              _BalanceCard(
-                wallet: wallet,
-                hidden: _hide,
-                onToggle: () => setState(() => _hide = !_hide),
-                onAdd: () => showReceiveSheet(context, wallet.accountNumber),
-                onSend: () => _go(const SendScreen()),
+              ListenableBuilder(
+                listenable: AppScope.of(context).preferences,
+                builder: (context, _) => _BalanceCard(
+                  wallet: wallet,
+                  hidden: AppScope.of(context).preferences.hideBalance,
+                  onToggle: () {
+                    final prefs = AppScope.of(context).preferences;
+                    prefs.setHideBalance(!prefs.hideBalance);
+                  },
+                  onAdd: () => showReceiveSheet(context, wallet.accountNumber),
+                  onSend: () => _go(const SendScreen()),
+                ),
               ),
             const SizedBox(height: 24),
             _QuickActions(
               actions: [
-                _Action('Transfer', Icons.north_east_rounded, () => _go(const SendScreen())),
+                _Action('To Avora', Icons.bolt_rounded, () => _go(const AvoraPayScreen())),
+                _Action('To bank', Icons.account_balance_outlined, () => _go(const SendScreen())),
                 _Action('Airtime', Icons.phone_android_rounded, () => _bills(BillCategory.airtime)),
                 _Action('Data', Icons.wifi_rounded, () => _bills(BillCategory.data)),
-                _Action('Electricity', Icons.bolt_rounded, () => _bills(BillCategory.electricity)),
+                _Action('Electricity', Icons.lightbulb_outline_rounded, () => _bills(BillCategory.electricity)),
                 _Action('TV', Icons.tv_rounded, () => _bills(BillCategory.tv)),
-                _Action('Savings', Icons.savings_outlined, () => shell.showTab(ShellScreenState.savingsTab)),
-                _Action(
-                  'Cards',
-                  Icons.credit_card_rounded,
-                  () => showComingSoon(context, 'Cards', Icons.credit_card_rounded),
-                ),
+
                 _Action('More', Icons.grid_view_rounded, () => _more(context)),
               ],
             ),
@@ -123,9 +125,24 @@ class _HomeTabState extends State<HomeTab> {
                   ? const SizedBox.shrink()
                   : _SendAgain(
                       items: recipients.items,
-                      onTap: (r) => _go(SendScreen(recipient: r)),
+                      onTap: (r) => _go(
+                        r.bankCode == avoraBank
+                            ? AmountScreen(
+                                person: Person(
+                                  tag: r.accountNumber.startsWith('@') ? r.accountNumber.substring(1) : '',
+                                  name: r.accountName,
+                                  phone: '',
+                                ),
+                                to: r.accountNumber,
+                              )
+                            : SendScreen(recipient: r),
+                      ),
                     ),
             ),
+            if (shell.profile != null && shell.profile!.tag.isEmpty) ...[
+              const SizedBox(height: 16),
+              _ClaimTag(onTap: () => _go(ProfileScreen(initial: shell.profile))),
+            ],
             const SizedBox(height: 16),
             const _PromoCard(),
             const SizedBox(height: 24),
@@ -390,6 +407,48 @@ class _QuickActions extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ClaimTag extends StatelessWidget {
+  const _ClaimTag({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Brand.lime.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        key: const Key('claim-tag'),
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              const Icon(Icons.alternate_email_rounded, color: Brand.deepGreen, size: 30),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Claim your @tag', style: theme.textTheme.titleSmall?.copyWith(color: Brand.deepGreen)),
+                    Text(
+                      'Get paid free and instantly by anyone on Avora, no account number needed.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: Brand.deepGreen),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: Brand.deepGreen),
+            ],
+          ),
         ),
       ),
     );

@@ -5,6 +5,7 @@ import '../app.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'help_screens.dart';
+import 'profile_screen.dart';
 import 'invite_screen.dart';
 import 'limits_screen.dart';
 import 'security_screens.dart';
@@ -70,10 +71,16 @@ class ProfileTab extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('My Avora account', style: theme.textTheme.titleMedium?.copyWith(color: Colors.white)),
+                      Text(
+                        (shell.profile?.name.isNotEmpty ?? false) ? shell.profile!.name : 'My Avora account',
+                        style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
+                      ),
                       const SizedBox(height: 2),
                       Text(
-                        w == null ? '—' : 'TAJBank · ${w.accountNumber}',
+                        [
+                          if (shell.profile?.tag.isNotEmpty ?? false) '@${shell.profile!.tag}',
+                          if (w != null) 'TAJBank · ${w.accountNumber}',
+                        ].join('  ·  '),
                         style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white.withValues(alpha: 0.8)),
                       ),
                     ],
@@ -121,7 +128,12 @@ class ProfileTab extends StatelessWidget {
               ),
             ),
           _Section('Account', [
-            _Item(Icons.badge_outlined, 'Personal details', () => soon('Personal details', Icons.badge_outlined)),
+            _Item(
+              Icons.badge_outlined,
+              'Personal details and @tag',
+              () => go(ProfileScreen(initial: shell.profile)),
+              key: const Key('personal'),
+            ),
             _Item(Icons.speed_rounded, 'Limits', () => go(const LimitsScreen()), key: const Key('limits')),
             _Item(Icons.description_outlined, 'Statements', () => soon('Statements', Icons.description_outlined)),
             _Item(
@@ -140,6 +152,9 @@ class ProfileTab extends StatelessWidget {
             ),
             _Item(Icons.password_rounded, 'Change PIN', () => go(const ChangePinScreen())),
             _Item(Icons.devices_rounded, 'Phones signed in', () => go(const DevicesScreen())),
+          ]),
+          _Section('App', [
+            _Item(Icons.dark_mode_outlined, 'Appearance', () => _pickTheme(context), key: const Key('appearance')),
           ]),
           _Section('Help', [
             _Item(
@@ -176,6 +191,34 @@ class ProfileTab extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> _pickTheme(BuildContext context) async {
+  final prefs = AppScope.of(context).preferences;
+  final m = await showModalBottomSheet<ThemeMode>(
+    context: context,
+    showDragHandle: true,
+    builder: (c) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final (mode, label, icon) in const [
+            (ThemeMode.system, 'Match my phone', Icons.brightness_auto_rounded),
+            (ThemeMode.light, 'Light', Icons.light_mode_rounded),
+            (ThemeMode.dark, 'Dark', Icons.dark_mode_rounded),
+          ])
+            ListTile(
+              key: Key('theme-${mode.name}'),
+              leading: Icon(icon),
+              title: Text(label),
+              trailing: mode == prefs.theme ? const Icon(Icons.check_rounded, color: Brand.green) : null,
+              onTap: () => Navigator.pop(c, mode),
+            ),
+        ],
+      ),
+    ),
+  );
+  if (m != null) await prefs.setTheme(m);
 }
 
 class _Item {

@@ -23,6 +23,8 @@ class Wallet {
   final int id;
   final String accountNumber;
   final int balance; // kobo
+
+  Map<String, dynamic> toJson() => {'id': id, 'account_number': accountNumber, 'balance': balance};
 }
 
 class StatementLine {
@@ -49,6 +51,14 @@ class StatementLine {
   final DateTime at;
 
   bool get isTransfer => kind.startsWith('transfer_');
+
+  Map<String, dynamic> toJson() => {
+    'kind': kind,
+    'description': description,
+    'ref': ref,
+    'amount': amount,
+    'at': at.toUtc().toIso8601String(),
+  };
 }
 
 class Quote {
@@ -455,4 +465,64 @@ class SupportMessage {
   final DateTime createdAt;
 
   bool get mine => sender == 'customer';
+}
+
+/// My name, tag and account details.
+class Profile {
+  Profile({required this.name, required this.tag, required this.phone, required this.accountNumber});
+
+  factory Profile.fromJson(Map<String, dynamic> j) => Profile(
+    name: j['name'] as String? ?? '',
+    tag: j['tag'] as String? ?? '',
+    phone: j['phone'] as String? ?? '',
+    accountNumber: j['account_number'] as String? ?? '',
+  );
+
+  final String name;
+  final String tag; // without the @
+  final String phone;
+  final String accountNumber;
+}
+
+/// Another Avora customer, as a payer sees them.
+class Person {
+  const Person({required this.tag, required this.name, required this.phone});
+
+  factory Person.fromJson(Map<String, dynamic> j) =>
+      Person(tag: j['tag'] as String? ?? '', name: j['name'] as String? ?? '', phone: j['phone'] as String? ?? '');
+
+  final String tag;
+  final String name;
+  final String phone; // masked
+
+  /// What to send to: the tag if they have one, otherwise the phone.
+  String get handle => tag.isNotEmpty ? '@$tag' : phone;
+}
+
+/// A free, instant transfer between Avora wallets.
+class P2PTransfer {
+  P2PTransfer({
+    required this.id,
+    required this.outgoing,
+    required this.amount,
+    required this.note,
+    required this.other,
+    required this.createdAt,
+  });
+
+  factory P2PTransfer.fromJson(Map<String, dynamic> j) => P2PTransfer(
+    id: j['id'] as String,
+    outgoing: j['direction'] == 'out',
+    amount: j['amount'] as int,
+    note: j['note'] as String? ?? '',
+    other: Person.fromJson(j['other'] as Map<String, dynamic>),
+    createdAt: DateTime.parse(j['created_at'] as String),
+  );
+
+  final String id;
+  final bool outgoing;
+  final int amount;
+  final String note;
+  final Person other;
+  final DateTime createdAt;
 }

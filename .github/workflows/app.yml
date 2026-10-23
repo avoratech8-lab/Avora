@@ -24,9 +24,14 @@ jobs:
       - run: dart format --output=none --set-exit-if-changed --line-length 120 lib test
       - run: flutter analyze
       - run: flutter test
-      # Demo build: no server needed, no real money. Install it on any Android phone.
-      - run: flutter build apk --debug
+      # Demo build: no server needed, no real money. A release build (fast,
+      # compiled ahead of time) split per CPU, so each APK is a fraction of a
+      # debug build. Almost every phone today wants the arm64-v8a one.
+      - run: flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols
+      - run: ls -lh build/app/outputs/flutter-apk/*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: avora-demo-apk
-          path: app/build/app/outputs/flutter-apk/app-debug.apk
+          path: |
+            app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk

@@ -488,4 +488,56 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('You joined with $friendCode'), findsOneWidget);
   });
+
+  testWidgets('claim a tag, then send to another Avora user for free', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    // Claim @ada from the Home card.
+    await tester.tap(find.byKey(const Key('claim-tag')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('profile-name')), 'Ada Obi');
+    await tester.enterText(find.byKey(const Key('profile-tag')), 'tolu');
+    await tester.tap(find.byKey(const Key('profile-save')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('taken'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('profile-tag')), 'ada');
+    await tester.tap(find.byKey(const Key('profile-save')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('claim-tag')), findsNothing);
+
+    // Find Tolu by tag and send ₦1,200 with no fee.
+    await tester.tap(find.byKey(const Key('action-to avora')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('avora-to')), '@tolu');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    expect(find.text('Tolu Adeyemi'), findsOneWidget);
+    // Let the "saved" message go so it doesn't cover the button.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('avora-next')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '1200');
+    await tester.tap(find.byKey(const Key('review')));
+    await tester.pumpAndSettle();
+    expect(find.text('Send on Avora'), findsOneWidget);
+    expect(find.text('Free'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    expect(find.text('Sent'), findsOneWidget);
+    expect(recipients.items.single.accountNumber, '@tolu');
+
+    await tester.tap(find.byKey(const Key('done')));
+    await tester.pumpAndSettle();
+    expect(find.text('₦48,800.00'), findsOneWidget);
+    await tester.tap(find.text('Activity'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('To Tolu Adeyemi (@tolu)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sent'), findsOneWidget);
+  });
 }

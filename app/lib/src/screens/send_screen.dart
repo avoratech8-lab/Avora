@@ -10,6 +10,7 @@ import '../money.dart';
 import '../pay_code.dart';
 import '../recipients.dart';
 import '../ui/widgets.dart';
+import 'avora_pay_screens.dart';
 import 'transfer_screen.dart';
 
 /// Step 1: who. Pick a bank, type the account number, and we look up the
@@ -117,7 +118,7 @@ class _SendScreenState extends State<SendScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final recents = AppScope.of(context).recipients.items;
+    final recents = AppScope.of(context).recipients.items.where((r) => r.bankCode != avoraBank).toList();
     final bank = _bank;
     final name = _name;
     return Scaffold(
@@ -295,9 +296,15 @@ class _BankPickerState extends State<_BankPicker> {
 
 /// Step 2: how much, on a big number pad, with a note.
 class AmountScreen extends StatefulWidget {
-  const AmountScreen({super.key, required this.recipient, this.amount = 0, this.note = ''});
+  const AmountScreen({super.key, this.recipient, this.person, this.to = '', this.amount = 0, this.note = ''})
+    : assert((recipient == null) != (person == null));
 
-  final Recipient recipient;
+  /// A bank account to send to...
+  final Recipient? recipient;
+
+  /// ...or an Avora customer, paid by [to] (an @tag or phone number).
+  final Person? person;
+  final String to;
 
   /// Filled in from a payment request; the payer can still change them.
   final int amount;
@@ -361,9 +368,44 @@ class _AmountScreenState extends State<AmountScreen> {
     return parts.length > 1 ? '$grouped.${parts[1]}' : grouped;
   }
 
+  Future<void> _reviewAvora(Person p, int amount) async {
+    final scope = AppScope.of(context);
+    final note = _note.text.trim();
+    final t = await showModalBottomSheet<P2PTransfer>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => ConfirmSheet(
+        title: 'Send on Avora',
+        avatar: p.name,
+        headline: formatNaira(amount),
+        rows: [
+          ('To', p.name),
+          if (p.tag.isNotEmpty) ('Tag', '@${p.tag}'),
+          if (note.isNotEmpty) ('Note', note),
+          ('Fee', 'Free'),
+          ('Total', formatNaira(amount)),
+        ],
+        footnote: 'Avora to Avora is always free and arrives instantly.',
+        action: (pin, key) =>
+            scope.api.sendToAvora(to: widget.to, amount: amount, note: note, pin: pin, idempotencyKey: key),
+      ),
+    );
+    if (t == null || !mounted) return;
+    await scope.recipients.add(Recipient(bankCode: avoraBank, accountNumber: widget.to, accountName: p.name));
+    if (!mounted) return;
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (_) => P2PReceiptScreen(id: t.id, initial: t),
+      ),
+      (route) => route.isFirst,
+    );
+  }
+
   Future<void> _review() async {
     final amount = _amount;
     if (amount == null) return;
+    final person = widget.person;
+    if (person != null) return _reviewAvora(person, amount);
     final api = AppScope.of(context).api;
     final scope = AppScope.of(context);
     setState(() => _busy = true);
@@ -378,7 +420,7 @@ class _AmountScreenState extends State<AmountScreen> {
     }
     if (!mounted) return;
 
-    final r = widget.recipient;
+    final r = widget.recipient!;
     final transfer = await showModalBottomSheet<Transfer>(
       context: context,
       isScrollControlled: true,
@@ -421,6 +463,10 @@ class _AmountScreenState extends State<AmountScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final r = widget.recipient;
+    final p = widget.person;
+    final (who, where) = r != null
+        ? (r.accountName, '${bankName(r.bankCode)} · ${r.accountNumber}')
+        : (p!.name, p.tag.isNotEmpty ? 'Avora · @${p.tag} · free' : 'Avora · free');
     final amount = _amount;
     final w = _wallet;
     final over = w != null && amount != null && amount > w.balance;
@@ -436,14 +482,14 @@ class _AmountScreenState extends State<AmountScreen> {
                 decoration: BoxDecoration(color: theme.colorScheme.surface, borderRadius: BorderRadius.circular(16)),
                 child: Row(
                   children: [
-                    InitialsAvatar(text: r.accountName, size: 40),
+                    InitialsAvatar(text: who, size: 40),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(r.accountName, style: theme.textTheme.titleSmall),
-                          Text('${bankName(r.bankCode)} · ${r.accountNumber}', style: theme.textTheme.bodySmall),
+                          Text(who, style: theme.textTheme.titleSmall),
+                          Text(where, style: theme.textTheme.bodySmall),
                         ],
                       ),
                     ),

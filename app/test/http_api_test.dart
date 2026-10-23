@@ -258,4 +258,38 @@ void main() {
     await api.changePin(oldPin: '135790', newPin: '246810');
     expect(jsonDecode(requests.last.body), {'old_pin': '135790', 'new_pin': '246810'});
   });
+
+  test('Avora tags: profile, find and send carry the PIN and key', () async {
+    await creds.setToken('tok');
+    final api = apiWith(
+      (r) => switch ('${r.method} ${r.url.path}') {
+        'GET /v1/me/profile' || 'PATCH /v1/me/profile' => json({
+          'name': 'Ada Obi',
+          'tag': 'ada',
+          'phone': '08031234567',
+          'account_number': '7012345678',
+        }),
+        'GET /v1/p2p/find' => json({'tag': 'tolu', 'name': 'Tolu Adeyemi', 'phone': '0801 *** 0001'}),
+        _ => json({
+          'id': 'p1',
+          'direction': 'out',
+          'amount': 120000,
+          'note': 'Suya',
+          'other': {'tag': 'tolu', 'name': 'Tolu Adeyemi', 'phone': '0801 *** 0001'},
+          'created_at': '2026-10-23T12:00:00Z',
+        }),
+      },
+    );
+
+    expect((await api.updateProfile(tag: 'ada')).tag, 'ada');
+    expect(jsonDecode(requests.last.body), {'name': '', 'tag': 'ada'});
+    expect((await api.findPerson('@tolu')).handle, '@tolu');
+    expect(requests.last.url.queryParameters['q'], '@tolu');
+    final t = await api.sendToAvora(to: '@tolu', amount: 120000, note: 'Suya', pin: '135790', idempotencyKey: 'k1');
+    expect((t.outgoing, t.other.name), (true, 'Tolu Adeyemi'));
+    expect(requests.last.headers['Idempotency-Key'], 'k1');
+    expect(jsonDecode(requests.last.body), {'to': '@tolu', 'amount': 120000, 'note': 'Suya', 'pin': '135790'});
+    expect((await api.p2pTransfer('p1')).id, 'p1');
+    expect(requests.last.url.path, '/v1/p2p/p1');
+  });
 }

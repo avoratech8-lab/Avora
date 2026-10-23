@@ -8,6 +8,7 @@ import 'src/api/demo_api.dart';
 import 'src/api/http_api.dart';
 import 'src/app.dart';
 import 'src/credentials.dart';
+import 'src/preferences.dart';
 import 'src/recipients.dart';
 import 'src/security.dart';
 
@@ -18,15 +19,23 @@ const apiUrl = String.fromEnvironment('AVORA_API_URL');
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final KeyValueStore store = apiUrl.isEmpty ? MemoryKeyValueStore() : SecureKeyValueStore();
-  final credentials = await Credentials.load(store);
+  // Everything that reads storage runs at once, so the first frame comes
+  // as soon as the slowest read is done rather than after all of them.
+  final (credentials, recipients, preferences, deviceName) = await (
+    Credentials.load(store),
+    RecentRecipients.load(store),
+    Preferences.load(store),
+    apiUrl.isEmpty ? Future.value('') : _deviceName(),
+  ).wait;
   final AvoraApi api = apiUrl.isEmpty
       ? DemoAvoraApi(credentials: credentials)
-      : HttpAvoraApi(baseUrl: Uri.parse(apiUrl), credentials: credentials, deviceName: await _deviceName());
+      : HttpAvoraApi(baseUrl: Uri.parse(apiUrl), credentials: credentials, deviceName: deviceName);
   runApp(
     AvoraApp(
       api: api,
       credentials: credentials,
-      recipients: await RecentRecipients.load(store),
+      recipients: recipients,
+      preferences: preferences,
       security: await Security.load(store, DeviceBiometrics(), signedIn: credentials.signedIn),
     ),
   );
