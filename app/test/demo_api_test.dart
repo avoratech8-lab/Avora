@@ -139,4 +139,53 @@ void main() {
     expect(lines.first.kind, 'bill_payment');
     expect(lines.first.description, 'Ikeja Electric · meter 45123456781');
   });
+
+  test('savings: goals move freely, locked plans hold until maturity or give back profit', () async {
+    final goal = await api.createPot(
+      kind: PotKind.goal,
+      name: 'Phone',
+      target: 1000000,
+      amount: 200000,
+      idempotencyKey: 'g',
+    );
+    expect(goal.balance, 200000);
+    expect((await api.createPot(kind: PotKind.goal, name: 'Phone', idempotencyKey: 'g')).id, goal.id);
+    expect((await api.depositToPot(goal.id, 100000, idempotencyKey: 'd')).balance, 300000);
+    expect((await api.depositToPot(goal.id, 100000, idempotencyKey: 'd')).balance, 300000);
+    expect((await api.withdrawFromPot(goal.id, amount: 50000, idempotencyKey: 'w')).balance, 250000);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 250000);
+
+    final plan = await api.createPot(
+      kind: PotKind.locked,
+      name: 'Rent',
+      lockDays: 90,
+      amount: 1200000,
+      idempotencyKey: 'l',
+    );
+    expect(plan.expectedRateBps, 1200);
+    await expectLater(
+      api.withdrawFromPot(plan.id, idempotencyKey: 'x'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'savings_locked')),
+    );
+
+    api.shareDemoProfit();
+    final (pots, _) = await api.savings();
+    final withProfit = pots.firstWhere((p) => p.id == plan.id);
+    expect(withProfit.profitEarned, 12000);
+
+    final broken = await api.withdrawFromPot(plan.id, breakEarly: true, idempotencyKey: 'b');
+    expect(broken.open, isFalse);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 250000);
+
+    now = now.add(const Duration(days: 31));
+    final short = await api.createPot(
+      kind: PotKind.locked,
+      name: 'Trip',
+      lockDays: 30,
+      amount: 100000,
+      idempotencyKey: 's',
+    );
+    now = now.add(const Duration(days: 30));
+    expect((await api.withdrawFromPot(short.id, idempotencyKey: 's2')).open, isFalse);
+  });
 }

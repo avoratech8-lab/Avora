@@ -34,3 +34,9 @@ String greeting([DateTime? now]) {
   if (h < 17) return 'Good afternoon';
   return 'Good evening';
 }
+
+/// "23 Jan 2027".
+String formatDate(DateTime t) {
+  final l = t.toLocal();
+  return '${l.day} ${_months[l.month - 1]} ${l.year}';
+}

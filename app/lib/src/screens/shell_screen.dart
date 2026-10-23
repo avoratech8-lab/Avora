@@ -5,9 +5,10 @@ import '../app.dart';
 import 'activity_tab.dart';
 import 'home_tab.dart';
 import 'profile_tab.dart';
+import 'savings_screens.dart';
 
-/// The signed-in app: Home, Activity and Me tabs sharing one copy of the
-/// wallet and statement.
+/// The signed-in app: Home, Savings, Activity and Me tabs sharing one copy
+/// of the wallet and statement.
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
 
@@ -17,6 +18,7 @@ class ShellScreen extends StatefulWidget {
 
 class ShellScreenState extends State<ShellScreen> {
   int _tab = 0;
+  final _savings = GlobalKey<SavingsTabState>();
   Wallet? wallet;
   List<StatementLine> lines = const [];
   bool loading = true;
@@ -48,7 +50,12 @@ class ShellScreenState extends State<ShellScreen> {
     }
   }
 
-  void showTab(int i) => setState(() => _tab = i);
+  static const homeTab = 0, savingsTab = 1, activityTab = 2, meTab = 3;
+
+  void showTab(int i) {
+    setState(() => _tab = i);
+    if (i == savingsTab) _savings.currentState?.refresh();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +64,7 @@ class ShellScreenState extends State<ShellScreen> {
         index: _tab,
         children: [
           HomeTab(shell: this),
+          SavingsTab(key: _savings, shell: this),
           ActivityTab(shell: this),
           ProfileTab(shell: this),
         ],
@@ -66,6 +74,11 @@ class ShellScreenState extends State<ShellScreen> {
         onDestinationSelected: showTab,
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Home'),
+          NavigationDestination(
+            icon: Icon(Icons.savings_outlined),
+            selectedIcon: Icon(Icons.savings_rounded),
+            label: 'Savings',
+          ),
           NavigationDestination(
             icon: Icon(Icons.receipt_long_outlined),
             selectedIcon: Icon(Icons.receipt_long_rounded),

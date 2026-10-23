@@ -15,6 +15,7 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
   - A decline is refunded in full, including the fee.
   - A transfer with no answer after 6 hours goes to `needs_review` for the ops team.
 - **Bills.** Airtime, data, electricity and TV through `GET /v1/bills/billers`, `POST /v1/bills/validate` and `POST /v1/bills/payments` (PIN and `Idempotency-Key` required). The money is held, then settled, or refunded in full if the biller declines. Bills count toward the new-phone limit.
+- **Savings.** Non-interest (mudarabah) pots, each its own ledger account: `GET/POST /v1/savings`, `POST /v1/savings/{id}/deposit` and `/withdraw`. Profit is shared after each month at the rate the partner bank declares: `POST /v1/ops/savings/profit` with `{"period": "2026-10", "goal_rate_bps": 800, "locked_rate_bps": 1200}` (each month once). Expected rates (8% goals; 10 to 16% locked) are placeholders until the bank publishes its profit-sharing ratios.
 - **Fees.** 5 free transfers a month, then ₦10 each. These are placeholders until pricing is decided.
 - **Sandbox bank rail** for local development:
 
@@ -42,7 +43,8 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - A real partner bank rail (TAJBank or a BaaS provider) in place of the sandbox.
 - KYC tiers and transaction limits.
 - A real bill aggregator in place of the bills sandbox, and requery for bill payments left pending.
-- Savings, support cases and the other features shown as "coming soon".
+- Savings profit on average daily balance (month-end balance for now), once the partner bank confirms its method.
+- Support cases and the other features shown as "coming soon".
 - A release build of the app (signing key, icon, Play Store listing).
 
 ## The app
@@ -54,6 +56,7 @@ The Flutter app covers:
 - **Send money:** searchable bank list, automatic name check, a big amount pad, a review screen showing the fee, and PIN approval.
 - **Airtime, data, electricity and TV:** all networks, the main DisCos (the meter name is checked and a token issued), and DStv, GOtv and StarTimes packages.
 - **Receipts:** live status for every payment and receipts you can share. They show the session ID for transfers and the token for electricity.
+- **Savings (interest-free):** Goal pots you can add to or take from at any time, and Locked plans (1, 3, 6 or 12 months) that earn a higher expected profit share. Breaking a plan early returns the money but gives back its profit share.
 - **Activity:** money in and out totals, search and filters, grouped by day.
 - **Me:** account details and shortcuts for features that are coming next.
 

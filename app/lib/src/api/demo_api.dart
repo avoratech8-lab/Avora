@@ -311,6 +311,170 @@ class DemoAvoraApi implements AvoraApi {
     return p;
   }
 
+  final rates = SavingsRates(
+    goalBps: 800,
+    terms: [
+      SavingsTerm(days: 30, rateBps: 1000),
+      SavingsTerm(days: 90, rateBps: 1200),
+      SavingsTerm(days: 180, rateBps: 1400),
+      SavingsTerm(days: 365, rateBps: 1600),
+    ],
+  );
+
+  @override
+  Future<(List<SavingsPot>, SavingsRates)> savings() async {
+    final u = _me;
+    final pots = u.pots.values.toList()
+      ..sort((a, b) => a.open == b.open ? b.createdAt.compareTo(a.createdAt) : (a.open ? -1 : 1));
+    return (pots, rates);
+  }
+
+  void _move(_DemoUser u, int fromWallet, String kind, String description, String ref) {
+    if (fromWallet > 0 && fromWallet > u.balance) {
+      throw ApiException('insufficient_funds', 'Your balance is too low for this.', status: 422);
+    }
+    u.balance -= fromWallet;
+    u.lines.add(StatementLine(kind: kind, description: description, ref: ref, amount: -fromWallet, at: _now()));
+  }
+
+  SavingsPot _pot(SavingsPot p, {int? balance, int? profit, bool? open}) => SavingsPot(
+    id: p.id,
+    kind: p.kind,
+    name: p.name,
+    target: p.target,
+    lockDays: p.lockDays,
+    maturesAt: p.maturesAt,
+    balance: balance ?? p.balance,
+    profitEarned: profit ?? p.profitEarned,
+    expectedRateBps: p.expectedRateBps,
+    open: open ?? p.open,
+    createdAt: p.createdAt,
+  );
+
+  @override
+  Future<SavingsPot> createPot({
+    required PotKind kind,
+    required String name,
+    int target = 0,
+    int lockDays = 0,
+    int amount = 0,
+    required String idempotencyKey,
+  }) async {
+    final u = _me;
+    final existing = u.potsByKey[idempotencyKey];
+    if (existing != null) return u.pots[existing]!;
+    name = name.trim();
+    if (name.isEmpty || name.length > 40) {
+      throw ApiException('invalid_request', 'Give it a name of up to 40 characters.', status: 400);
+    }
+    int rate = rates.goalBps;
+    if (kind == PotKind.locked) {
+      final term = rates.terms.where((t) => t.days == lockDays);
+      if (term.isEmpty) throw ApiException('invalid_request', 'Choose one of the offered terms.', status: 400);
+      if (amount < 100000) throw ApiException('invalid_request', 'A locked plan starts at ₦1,000.', status: 400);
+      rate = term.first.rateBps;
+    }
+    final id = randomId();
+    if (amount > 0) _move(u, amount, 'savings_deposit', 'Saved to $name', id);
+    final now = _now();
+    final pot = SavingsPot(
+      id: id,
+      kind: kind,
+      name: name,
+      target: kind == PotKind.goal ? target : 0,
+      lockDays: kind == PotKind.locked ? lockDays : 0,
+      maturesAt: kind == PotKind.locked ? now.add(Duration(days: lockDays)) : null,
+      balance: amount,
+      profitEarned: 0,
+      expectedRateBps: rate,
+      open: true,
+      createdAt: now,
+    );
+    u.pots[id] = pot;
+    u.potsByKey[idempotencyKey] = id;
+    return pot;
+  }
+
+  SavingsPot _ownPot(_DemoUser u, String id) {
+    final p = u.pots[id];
+    if (p == null) throw ApiException('not_found', 'Not found.', status: 404);
+    if (!p.open) throw ApiException('savings_closed', 'This savings pot is closed.', status: 409);
+    return p;
+  }
+
+  @override
+  Future<SavingsPot> depositToPot(String id, int amount, {required String idempotencyKey}) async {
+    final u = _me;
+    if (!u.potMoves.add(idempotencyKey)) return u.pots[id]!;
+    final p = _ownPot(u, id);
+    if (p.kind == PotKind.locked) {
+      throw ApiException('savings_locked', 'Start a new plan to lock more money.', status: 409);
+    }
+    if (amount <= 0) throw ApiException('invalid_request', 'Amount must be more than zero.', status: 400);
+    try {
+      _move(u, amount, 'savings_deposit', 'Saved to ${p.name}', id);
+    } catch (_) {
+      u.potMoves.remove(idempotencyKey);
+      rethrow;
+    }
+    return u.pots[id] = _pot(p, balance: p.balance + amount);
+  }
+
+  @override
+  Future<SavingsPot> withdrawFromPot(
+    String id, {
+    int amount = 0,
+    bool breakEarly = false,
+    required String idempotencyKey,
+  }) async {
+    final u = _me;
+    if (u.potMoves.contains(idempotencyKey)) return u.pots[id]!;
+    final p = _ownPot(u, id);
+    var forfeit = 0;
+    if (p.kind == PotKind.goal) {
+      if (amount <= 0) throw ApiException('invalid_request', 'Amount must be more than zero.', status: 400);
+      if (amount > p.balance) {
+        throw ApiException('insufficient_funds', 'That is more than this pot holds.', status: 422);
+      }
+    } else {
+      final early = !p.isMatured(_now());
+      if (early && !breakEarly) {
+        throw ApiException(
+          'savings_locked',
+          "This plan is locked until it matures. You can break it early, but you'll give back its profit share.",
+          status: 409,
+        );
+      }
+      amount = p.balance;
+      if (early) forfeit = p.profitEarned;
+    }
+    u.potMoves.add(idempotencyKey);
+    _move(
+      u,
+      -(amount - forfeit),
+      'savings_withdraw',
+      forfeit > 0 ? 'From ${p.name} (broken early, profit share returned)' : 'From ${p.name}',
+      id,
+    );
+    return u.pots[id] = _pot(
+      p,
+      balance: p.balance - amount,
+      profit: p.profitEarned - forfeit,
+      open: p.kind == PotKind.goal,
+    );
+  }
+
+  /// Demo only: shares a month of profit at the expected rates, so the
+  /// savings screens can be tried.
+  void shareDemoProfit() {
+    final u = _me;
+    for (final p in u.pots.values.toList()) {
+      if (!p.open || p.balance <= 0) continue;
+      final share = p.balance * p.expectedRateBps ~/ 10000 ~/ 12;
+      u.pots[p.id] = _pot(p, balance: p.balance + share, profit: p.profitEarned + share);
+    }
+  }
+
   @override
   Future<void> logout() async {
     _tokens.remove(credentials.token);
@@ -330,6 +494,9 @@ class _DemoUser {
   final byKey = <String, String>{};
   final bills = <String, BillPayment>{};
   final billsByKey = <String, String>{};
+  final pots = <String, SavingsPot>{};
+  final potsByKey = <String, String>{};
+  final potMoves = <String>{};
 }
 
 /// How a bill payment reads on the statement; the backend uses the same words.

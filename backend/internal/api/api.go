@@ -30,6 +30,7 @@ import (
 	"avora/backend/internal/inbound"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/savings"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
 )
@@ -40,6 +41,7 @@ type Server struct {
 	System        wallets.System
 	Transfers     *transfers.Service
 	Bills         *bills.Service
+	Savings       *savings.Service
 	Auth          *auth.Service
 	WebhookSecret string
 	OpsKey        string
@@ -74,8 +76,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/bills/payments", s.signedIn(s.payBill))
 	mux.HandleFunc("GET /v1/bills/payments/{id}", s.signedIn(s.getBillPayment))
 
+	mux.HandleFunc("GET /v1/savings", s.signedIn(s.listSavings))
+	mux.HandleFunc("POST /v1/savings", s.signedIn(s.createSavings))
+	mux.HandleFunc("POST /v1/savings/{id}/deposit", s.signedIn(s.depositSavings))
+	mux.HandleFunc("POST /v1/savings/{id}/withdraw", s.signedIn(s.withdrawSavings))
+
 	mux.HandleFunc("POST /v1/webhooks/inbound-credit", s.inboundCredit)
 	mux.HandleFunc("POST /v1/ops/transfers/{id}/resolve", s.opsOnly(s.resolveTransfer))
+	mux.HandleFunc("POST /v1/ops/savings/profit", s.opsOnly(s.shareProfit))
 	return mux
 }
 
@@ -314,6 +322,91 @@ func (s *Server) payBill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pay)
 }
 
+func (s *Server) listSavings(w http.ResponseWriter, r *http.Request) {
+	pots, err := s.Savings.List(r.Context(), principal(r).WalletID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pots": pots, "rates": s.Savings.Rates()})
+}
+
+func (s *Server) createSavings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Kind     savings.Kind `json:"kind"`
+		Name     string       `json:"name"`
+		Target   int64        `json:"target"`
+		LockDays int          `json:"lock_days"`
+		Amount   int64        `json:"amount"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	pot, err := s.Savings.Create(r.Context(), savings.CreateRequest{
+		IdempotencyKey:  r.Header.Get("Idempotency-Key"),
+		WalletAccountID: principal(r).WalletID,
+		Kind:            body.Kind,
+		Name:            body.Name,
+		Target:          body.Target,
+		LockDays:        body.LockDays,
+		Amount:          body.Amount,
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pot)
+}
+
+func (s *Server) depositSavings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Amount int64 `json:"amount"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	pot, err := s.Savings.Deposit(r.Context(), principal(r).WalletID, r.PathValue("id"), r.Header.Get("Idempotency-Key"), body.Amount)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pot)
+}
+
+func (s *Server) withdrawSavings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Amount     int64 `json:"amount"`
+		BreakEarly bool  `json:"break_early"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	pot, err := s.Savings.Withdraw(r.Context(), principal(r).WalletID, r.PathValue("id"),
+		r.Header.Get("Idempotency-Key"), body.Amount, body.BreakEarly)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pot)
+}
+
+func (s *Server) shareProfit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Period        string `json:"period"`
+		GoalRateBps   int    `json:"goal_rate_bps"`
+		LockedRateBps int    `json:"locked_rate_bps"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	run, err := s.Savings.DistributeProfit(r.Context(), body.Period, body.GoalRateBps, body.LockedRateBps)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
 func (s *Server) getBillPayment(w http.ResponseWriter, r *http.Request) {
 	pay, err := s.Bills.Get(r.Context(), r.PathValue("id"))
 	if err == nil && pay.WalletAccountID != principal(r).WalletID {
@@ -424,15 +517,23 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_request", strings.TrimPrefix(err.Error(), "auth: "))
 	case errors.Is(err, ledger.ErrInsufficientFunds):
 		writeError(w, http.StatusUnprocessableEntity, "insufficient_funds", "Your balance is too low for this payment, including any fee.")
+	case errors.Is(err, savings.ErrLocked):
+		writeError(w, http.StatusConflict, "savings_locked", "This plan is locked until it matures. You can break it early, but you'll give back its profit share.")
+	case errors.Is(err, savings.ErrClosed):
+		writeError(w, http.StatusConflict, "savings_closed", "This savings pot is closed.")
+	case errors.Is(err, savings.ErrDeclared):
+		writeError(w, http.StatusConflict, "already_declared", err.Error())
 	case errors.Is(err, bills.ErrCustomerNotFound):
 		writeError(w, http.StatusNotFound, "customer_not_found", "We could not find that number. Check it and try again.")
-	case errors.Is(err, transfers.ErrInvalid), errors.Is(err, inbound.ErrInvalid), errors.Is(err, bills.ErrInvalid):
+	case errors.Is(err, transfers.ErrInvalid), errors.Is(err, inbound.ErrInvalid), errors.Is(err, bills.ErrInvalid),
+		errors.Is(err, savings.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, transfers.ErrIdempotencyConflict), errors.Is(err, bills.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
 	case errors.Is(err, transfers.ErrNotResolvable):
 		writeError(w, http.StatusConflict, "not_resolvable", err.Error())
-	case errors.Is(err, wallets.ErrNotFound), errors.Is(err, transfers.ErrNotFound), errors.Is(err, bills.ErrNotFound):
+	case errors.Is(err, wallets.ErrNotFound), errors.Is(err, transfers.ErrNotFound), errors.Is(err, bills.ErrNotFound),
+		errors.Is(err, savings.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Not found.")
 	default:
 		s.Log.Error("request failed", "err", err)

@@ -41,6 +41,26 @@ abstract class AvoraApi {
     required String idempotencyKey,
   });
   Future<BillPayment> billPayment(String id);
+
+  Future<(List<SavingsPot>, SavingsRates)> savings();
+  Future<SavingsPot> createPot({
+    required PotKind kind,
+    required String name,
+    int target = 0,
+    int lockDays = 0,
+    int amount = 0,
+    required String idempotencyKey,
+  });
+  Future<SavingsPot> depositToPot(String id, int amount, {required String idempotencyKey});
+
+  /// Takes [amount] out of a goal pot, or everything out of a locked plan
+  /// (which must have matured unless [breakEarly]).
+  Future<SavingsPot> withdrawFromPot(
+    String id, {
+    int amount = 0,
+    bool breakEarly = false,
+    required String idempotencyKey,
+  });
   Future<void> logout();
 }
 

@@ -1,4 +1,5 @@
 import 'package:avora/src/api/demo_api.dart';
+import 'package:avora/src/api/models.dart';
 import 'package:avora/src/app.dart';
 import 'package:avora/src/credentials.dart';
 import 'package:avora/src/recipients.dart';
@@ -185,5 +186,61 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text("Didn't go through"), findsOneWidget);
     expect(find.text('beneficiary bank declined'), findsOneWidget);
+  });
+
+  testWidgets('open a goal, add money, see it on the Savings tab', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Savings').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Interest-free'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('new-goal')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Rent'));
+    await tester.enterText(find.byKey(const Key('pot-target')), '100000');
+    await tester.enterText(find.byKey(const Key('pot-amount')), '10000');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pot-create')));
+    await tester.pumpAndSettle();
+    expect(find.text('Rent'), findsOneWidget);
+    expect(find.text('10% of ₦100,000.00'), findsOneWidget);
+
+    await tester.tap(find.text('Rent'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pot-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('move-amount')), '5000');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('move-confirm')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pot-balance')), findsOneWidget);
+    expect(find.text('₦15,000.00'), findsWidgets);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('savings-total')), findsOneWidget);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 1500000);
+  });
+
+  testWidgets('breaking a locked plan early asks first', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await api.createPot(kind: PotKind.locked, name: 'School fees', lockDays: 365, amount: 2000000, idempotencyKey: 'k');
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Savings').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('School fees'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pot-break')));
+    await tester.pumpAndSettle();
+    expect(find.text('Break this plan?'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-break')));
+    await tester.pumpAndSettle();
+    expect(find.text('Closed'), findsWidgets);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit);
   });
 }

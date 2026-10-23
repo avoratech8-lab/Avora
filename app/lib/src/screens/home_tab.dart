@@ -93,11 +93,7 @@ class _HomeTabState extends State<HomeTab> {
                 _Action('Data', Icons.wifi_rounded, () => _bills(BillCategory.data)),
                 _Action('Electricity', Icons.bolt_rounded, () => _bills(BillCategory.electricity)),
                 _Action('TV', Icons.tv_rounded, () => _bills(BillCategory.tv)),
-                _Action(
-                  'Savings',
-                  Icons.savings_outlined,
-                  () => showComingSoon(context, 'Savings', Icons.savings_outlined),
-                ),
+                _Action('Savings', Icons.savings_outlined, () => shell.showTab(ShellScreenState.savingsTab)),
                 _Action(
                   'Cards',
                   Icons.credit_card_rounded,
@@ -121,7 +117,7 @@ class _HomeTabState extends State<HomeTab> {
             Row(
               children: [
                 Expanded(child: Text('Recent activity', style: theme.textTheme.titleMedium)),
-                TextButton(onPressed: () => shell.showTab(1), child: const Text('See all')),
+                TextButton(onPressed: () => shell.showTab(ShellScreenState.activityTab), child: const Text('See all')),
               ],
             ),
             if (!shell.loading && shell.lines.isEmpty)

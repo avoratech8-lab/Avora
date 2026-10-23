@@ -18,6 +18,7 @@ import (
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/savings"
 	"avora/backend/internal/testdb"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
@@ -63,8 +64,13 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	acfg.BcryptCost = bcrypt.MinCost
 	sms := &fakeSMS{}
 	nubans := []string{"9000000001", "9000000002"}
+	sav, err := savings.NewService(ctx, pool, savings.DefaultRates())
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &api.Server{
-		DB: pool, Rail: rail, System: sys,
+		Savings: sav,
+		DB:      pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
 		Auth: auth.NewService(pool, sms, acfg, func(context.Context, string) (string, error) {
@@ -296,6 +302,54 @@ func TestNewDeviceLimitCountsBills(t *testing.T) {
 	tv["plan_code"], tv["amount"] = "dstv-premium", 1
 	if code, e := newPhone.call("POST", "/v1/bills/payments", tv, map[string]string{"Idempotency-Key": "tv2"}); code != http.StatusForbidden {
 		t.Errorf("premium over limit: %d %v", code, e)
+	}
+}
+
+func TestSavings(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 9_000_00)
+
+	code, list := ada.call("GET", "/v1/savings", nil, nil)
+	if code != http.StatusOK || len(list["pots"].([]any)) != 0 || list["rates"] == nil {
+		t.Fatalf("list: %d %v", code, list)
+	}
+	code, pot := ada.call("POST", "/v1/savings", map[string]any{"kind": "goal", "name": "Laptop", "target": 500_000_00, "amount": 2_000_00},
+		map[string]string{"Idempotency-Key": "p1"})
+	if code != http.StatusOK || pot["balance"] != float64(2_000_00) {
+		t.Fatalf("create: %d %v", code, pot)
+	}
+	id := pot["id"].(string)
+	if code, pot = ada.call("POST", "/v1/savings/"+id+"/deposit", map[string]any{"amount": 1_000_00}, map[string]string{"Idempotency-Key": "d1"}); code != http.StatusOK || pot["balance"] != float64(3_000_00) {
+		t.Fatalf("deposit: %d %v", code, pot)
+	}
+	if code, pot = ada.call("POST", "/v1/savings/"+id+"/withdraw", map[string]any{"amount": 500_00}, map[string]string{"Idempotency-Key": "w1"}); code != http.StatusOK || pot["balance"] != float64(2_500_00) {
+		t.Fatalf("withdraw: %d %v", code, pot)
+	}
+
+	code, locked := ada.call("POST", "/v1/savings", map[string]any{"kind": "locked", "name": "Rent", "lock_days": 30, "amount": 5_000_00},
+		map[string]string{"Idempotency-Key": "p2"})
+	if code != http.StatusOK || locked["expected_rate_bps"] != float64(1000) {
+		t.Fatalf("locked: %d %v", code, locked)
+	}
+	if code, e := ada.call("POST", "/v1/savings/"+locked["id"].(string)+"/withdraw", map[string]any{}, map[string]string{"Idempotency-Key": "w2"}); code != http.StatusConflict || e["error"].(map[string]any)["code"] != "savings_locked" {
+		t.Errorf("early withdraw: %d %v", code, e)
+	}
+
+	ops := &client{t: t, srv: srv}
+	body := map[string]any{"period": "2026-10", "goal_rate_bps": 800, "locked_rate_bps": 1000}
+	if code, _ := ops.call("POST", "/v1/ops/savings/profit", body, nil); code != http.StatusUnauthorized {
+		t.Errorf("profit without key: %d", code)
+	}
+	if code, run := ops.call("POST", "/v1/ops/savings/profit", body, map[string]string{"X-Ops-Key": opsKey}); code != http.StatusOK || run["pots"] != float64(2) {
+		t.Errorf("profit: %d %v", code, run)
+	}
+
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08099999999", "570264")
+	if code, _ := bola.call("POST", "/v1/savings/"+id+"/withdraw", map[string]any{"amount": 1}, map[string]string{"Idempotency-Key": "x"}); code != http.StatusNotFound {
+		t.Errorf("other user's pot: %d", code)
 	}
 }
 

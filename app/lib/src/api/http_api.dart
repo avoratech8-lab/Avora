@@ -154,6 +154,57 @@ class HttpAvoraApi implements AvoraApi {
       BillPayment.fromJson(await _call('GET', '/v1/bills/payments/$id'));
 
   @override
+  Future<(List<SavingsPot>, SavingsRates)> savings() async {
+    final j = await _call('GET', '/v1/savings');
+    return (
+      [for (final p in j['pots'] as List) SavingsPot.fromJson(p as Map<String, dynamic>)],
+      SavingsRates.fromJson(j['rates'] as Map<String, dynamic>),
+    );
+  }
+
+  @override
+  Future<SavingsPot> createPot({
+    required PotKind kind,
+    required String name,
+    int target = 0,
+    int lockDays = 0,
+    int amount = 0,
+    required String idempotencyKey,
+  }) async => SavingsPot.fromJson(
+    await _call(
+      'POST',
+      '/v1/savings',
+      body: {'kind': kind.name, 'name': name, 'target': target, 'lock_days': lockDays, 'amount': amount},
+      headers: {'Idempotency-Key': idempotencyKey},
+    ),
+  );
+
+  @override
+  Future<SavingsPot> depositToPot(String id, int amount, {required String idempotencyKey}) async => SavingsPot.fromJson(
+    await _call(
+      'POST',
+      '/v1/savings/$id/deposit',
+      body: {'amount': amount},
+      headers: {'Idempotency-Key': idempotencyKey},
+    ),
+  );
+
+  @override
+  Future<SavingsPot> withdrawFromPot(
+    String id, {
+    int amount = 0,
+    bool breakEarly = false,
+    required String idempotencyKey,
+  }) async => SavingsPot.fromJson(
+    await _call(
+      'POST',
+      '/v1/savings/$id/withdraw',
+      body: {'amount': amount, 'break_early': breakEarly},
+      headers: {'Idempotency-Key': idempotencyKey},
+    ),
+  );
+
+  @override
   Future<void> logout() async {
     try {
       await _call('POST', '/v1/auth/logout');
