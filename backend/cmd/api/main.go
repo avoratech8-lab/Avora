@@ -18,6 +18,7 @@ import (
 
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
+	"avora/backend/internal/bills"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
 	"avora/backend/internal/rails"
@@ -68,6 +69,7 @@ func run(log *slog.Logger) error {
 		Rail:          rail,
 		System:        sys,
 		Transfers:     svc,
+		Bills:         bills.NewService(pool, bills.Sandbox{}, sys),
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,

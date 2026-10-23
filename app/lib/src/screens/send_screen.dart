@@ -1,6 +1,5 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/api.dart';
 import '../api/models.dart';
@@ -8,12 +7,16 @@ import '../app.dart';
 import '../banks.dart';
 import '../ids.dart';
 import '../money.dart';
+import '../recipients.dart';
+import '../ui/widgets.dart';
 import 'transfer_screen.dart';
 
-/// Pick a bank, type the account number (we look up the name as soon as it
-/// has 10 digits), enter an amount, then review and approve with the PIN.
+/// Step 1: who. Pick a bank, type the account number, and we look up the
+/// name as soon as it has 10 digits. Saved recipients skip all of that.
 class SendScreen extends StatefulWidget {
-  const SendScreen({super.key});
+  const SendScreen({super.key, this.recipient});
+
+  final Recipient? recipient;
 
   @override
   State<SendScreen> createState() => _SendScreenState();
@@ -21,63 +24,315 @@ class SendScreen extends StatefulWidget {
 
 class _SendScreenState extends State<SendScreen> {
   final _account = TextEditingController();
-  final _amount = TextEditingController();
-  final _narration = TextEditingController();
-
   Bank? _bank;
-  String? _accountName;
-  String? _lookupError;
-  bool _lookingUp = false;
+  String? _name;
+  String? _error;
+  bool _looking = false;
   int _lookup = 0; // ignores answers to lookups that are no longer current
-  String? _amountError;
-  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final r = widget.recipient;
+    if (r != null) {
+      _bank = banks.firstWhere((b) => b.code == r.bankCode, orElse: () => Bank(r.bankCode, bankName(r.bankCode)));
+      _account.text = r.accountNumber;
+      _name = r.accountName;
+    }
+  }
 
   @override
   void dispose() {
     _account.dispose();
-    _amount.dispose();
-    _narration.dispose();
     super.dispose();
   }
 
-  void _recipientChanged() {
+  void _changed() {
     final bank = _bank;
     final number = _account.text.trim();
     final id = ++_lookup;
     setState(() {
-      _accountName = null;
-      _lookupError = null;
-      _lookingUp = false;
+      _name = null;
+      _error = null;
+      _looking = false;
     });
     if (bank == null || !RegExp(r'^\d{10}$').hasMatch(number)) return;
 
-    setState(() => _lookingUp = true);
+    setState(() => _looking = true);
     AppScope.of(context).api
         .nameEnquiry(bankCode: bank.code, accountNumber: number)
         .then(
           (name) {
-            if (mounted && id == _lookup) setState(() => _accountName = name);
+            if (mounted && id == _lookup) setState(() => _name = name);
           },
           onError: (Object e) {
             if (mounted && id == _lookup) {
-              setState(
-                () => _lookupError = e is ApiException ? e.message : "We couldn't check that account. Try again.",
-              );
+              setState(() => _error = e is ApiException ? e.message : "We couldn't check that account. Try again.");
             }
           },
         )
         .whenComplete(() {
-          if (mounted && id == _lookup) setState(() => _lookingUp = false);
+          if (mounted && id == _lookup) setState(() => _looking = false);
         });
   }
 
-  Future<void> _review() async {
-    final amount = parseNaira(_amount.text);
-    setState(() => _amountError = amount == null ? 'Enter an amount, like 5,000' : null);
-    if (amount == null || _accountName == null || _bank == null) return;
+  Future<void> _pickBank() async {
+    final b = await showModalBottomSheet<Bank>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const _BankPicker(),
+    );
+    if (b != null) {
+      _bank = b;
+      _changed();
+    }
+  }
 
-    setState(() => _busy = true);
+  void _continue(Recipient r) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AmountScreen(recipient: r)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final recents = AppScope.of(context).recipients.items;
+    final bank = _bank;
+    final name = _name;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Send to bank')),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                children: [
+                  Text('Bank', style: theme.textTheme.labelMedium),
+                  const SizedBox(height: 8),
+                  Material(
+                    color: theme.inputDecorationTheme.fillColor,
+                    borderRadius: BorderRadius.circular(16),
+                    child: InkWell(
+                      key: const Key('bank'),
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: _pickBank,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        child: Row(
+                          children: [
+                            if (bank != null)
+                              InitialsAvatar(text: bank.name, size: 36)
+                            else
+                              const Icon(Icons.account_balance_outlined),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                bank?.name ?? 'Choose a bank',
+                                style: bank == null
+                                    ? theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)
+                                    : theme.textTheme.titleSmall,
+                              ),
+                            ),
+                            const Icon(Icons.expand_more_rounded),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text('Account number', style: theme.textTheme.labelMedium),
+                  const SizedBox(height: 8),
+                  TextField(
+                    key: const Key('account'),
+                    controller: _account,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
+                    style: theme.textTheme.titleMedium?.copyWith(letterSpacing: 1.5),
+                    decoration: InputDecoration(
+                      hintText: '10 digits',
+                      errorText: _error,
+                      suffixIcon: _looking
+                          ? const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                            )
+                          : null,
+                    ),
+                    onChanged: (_) => _changed(),
+                  ),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: name == null
+                        ? const SizedBox(height: 8)
+                        : Container(
+                            key: ValueKey(name),
+                            margin: const EdgeInsets.only(top: 12),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Row(
+                              children: [
+                                InitialsAvatar(text: name, size: 40),
+                                const SizedBox(width: 12),
+                                Expanded(child: Text(name, style: theme.textTheme.titleSmall)),
+                                Icon(Icons.verified_rounded, color: theme.colorScheme.primary),
+                              ],
+                            ),
+                          ),
+                  ),
+                  if (recents.isNotEmpty) ...[
+                    const SizedBox(height: 28),
+                    Text('Recent', style: theme.textTheme.titleSmall),
+                    const SizedBox(height: 4),
+                    for (final r in recents.take(6))
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: InitialsAvatar(text: r.accountName),
+                        title: Text(r.accountName, style: theme.textTheme.titleSmall),
+                        subtitle: Text('${bankName(r.bankCode)} · ${r.accountNumber}'),
+                        onTap: () => _continue(r),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+              child: PrimaryButton(
+                key: const Key('next'),
+                label: 'Continue',
+                onPressed: name == null || bank == null
+                    ? null
+                    : () => _continue(
+                        Recipient(bankCode: bank.code, accountNumber: _account.text.trim(), accountName: name),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BankPicker extends StatefulWidget {
+  const _BankPicker();
+
+  @override
+  State<_BankPicker> createState() => _BankPickerState();
+}
+
+class _BankPickerState extends State<_BankPicker> {
+  String _q = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final list = banks.where((b) => b.name.toLowerCase().contains(_q.toLowerCase())).toList();
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.8,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Choose a bank', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('bank-search'),
+                    autofocus: true,
+                    decoration: const InputDecoration(hintText: 'Search banks', prefixIcon: Icon(Icons.search_rounded)),
+                    onChanged: (v) => setState(() => _q = v.trim()),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: list.length,
+                itemBuilder: (context, i) => ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                  leading: InitialsAvatar(text: list[i].name, size: 40),
+                  title: Text(list[i].name, style: theme.textTheme.titleSmall),
+                  onTap: () => Navigator.pop(context, list[i]),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Step 2: how much, on a big number pad, with a note.
+class AmountScreen extends StatefulWidget {
+  const AmountScreen({super.key, required this.recipient});
+
+  final Recipient recipient;
+
+  @override
+  State<AmountScreen> createState() => _AmountScreenState();
+}
+
+class _AmountScreenState extends State<AmountScreen> {
+  String _typed = '';
+  final _note = TextEditingController();
+  bool _busy = false;
+  Wallet? _wallet;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_wallet == null) {
+      AppScope.of(context).api.wallet().then((w) {
+        if (mounted) setState(() => _wallet = w);
+      }, onError: (_) {});
+    }
+  }
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  int? get _amount => parseNaira(_typed);
+
+  void _digit(String d) {
+    final next = _typed + d;
+    if (next == '0') return;
+    final dot = next.indexOf('.');
+    if (dot >= 0 && next.length - dot > 3) return;
+    if ((dot < 0 ? next.length : dot) > 9) return;
+    setState(() => _typed = next);
+  }
+
+  void _dot() {
+    if (_typed.contains('.')) return;
+    setState(() => _typed = _typed.isEmpty ? '0.' : '$_typed.');
+  }
+
+  String get _display {
+    if (_typed.isEmpty) return '0';
+    final parts = _typed.split('.');
+    final whole = parts[0].isEmpty ? '0' : parts[0];
+    final grouped = whole.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+    return parts.length > 1 ? '$grouped.${parts[1]}' : grouped;
+  }
+
+  Future<void> _review() async {
+    final amount = _amount;
+    if (amount == null) return;
     final api = AppScope.of(context).api;
+    final scope = AppScope.of(context);
+    setState(() => _busy = true);
     final Quote quote;
     try {
       quote = await api.quote(amount);
@@ -89,168 +344,205 @@ class _SendScreenState extends State<SendScreen> {
     }
     if (!mounted) return;
 
+    final r = widget.recipient;
     final transfer = await showModalBottomSheet<Transfer>(
       context: context,
       isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _ReviewSheet(
-        api: api,
-        bank: _bank!,
-        accountNumber: _account.text.trim(),
-        accountName: _accountName!,
-        narration: _narration.text.trim(),
-        quote: quote,
+      builder: (_) => ConfirmSheet(
+        title: 'Confirm transfer',
+        avatar: r.accountName,
+        headline: formatNaira(quote.amount),
+        rows: [
+          ('To', r.accountName),
+          ('Account', '${r.accountNumber} · ${bankName(r.bankCode)}'),
+          if (_note.text.trim().isNotEmpty) ('Note', _note.text.trim()),
+          ('Fee', quote.fee == 0 ? 'Free' : formatNaira(quote.fee)),
+          ('Total', formatNaira(quote.total)),
+        ],
+        footnote: quote.fee == 0
+            ? 'This one is free. ${quote.freeTransfersLeft} free transfer${quote.freeTransfersLeft == 1 ? '' : 's'} left this month.'
+            : "You've used this month's free transfers, so a ${formatNaira(quote.fee)} fee applies.",
+        action: (pin, key) => api.send(
+          bankCode: r.bankCode,
+          accountNumber: r.accountNumber,
+          amount: quote.amount,
+          narration: _note.text.trim(),
+          pin: pin,
+          idempotencyKey: key,
+        ),
       ),
     );
-    if (transfer != null && mounted) {
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => TransferScreen(transferId: transfer.id, initial: transfer),
-        ),
-      );
-    }
+    if (transfer == null || !mounted) return;
+    await scope.recipients.add(r);
+    if (!mounted) return;
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (_) => TransferScreen(transferId: transfer.id, initial: transfer),
+      ),
+      (route) => route.isFirst,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final ready = _accountName != null && !_busy;
+    final r = widget.recipient;
+    final amount = _amount;
+    final w = _wallet;
+    final over = w != null && amount != null && amount > w.balance;
     return Scaffold(
-      appBar: AppBar(title: const Text('Send money')),
+      appBar: AppBar(title: const Text('Amount')),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            DropdownButtonFormField<Bank>(
-              key: const Key('bank'),
-              initialValue: _bank,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Bank', border: OutlineInputBorder()),
-              items: [for (final b in banks) DropdownMenuItem(value: b, child: Text(b.name))],
-              onChanged: (b) {
-                _bank = b;
-                _recipientChanged();
-              },
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              key: const Key('account'),
-              controller: _account,
-              keyboardType: TextInputType.number,
-              maxLength: 10,
-              decoration: InputDecoration(
-                labelText: 'Account number',
-                border: const OutlineInputBorder(),
-                errorText: _lookupError,
-                helperText: _accountName,
-                helperStyle: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
-                suffixIcon: _lookingUp
-                    ? const Padding(
-                        padding: EdgeInsets.all(14),
-                        child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                      )
-                    : _accountName != null
-                    ? Icon(Icons.verified, color: theme.colorScheme.primary)
-                    : null,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: theme.colorScheme.surface, borderRadius: BorderRadius.circular(16)),
+                child: Row(
+                  children: [
+                    InitialsAvatar(text: r.accountName, size: 40),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(r.accountName, style: theme.textTheme.titleSmall),
+                          Text('${bankName(r.bankCode)} · ${r.accountNumber}', style: theme.textTheme.bodySmall),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              onChanged: (_) => _recipientChanged(),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              key: const Key('amount'),
-              controller: _amount,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: 'Amount',
-                prefixText: '₦ ',
-                errorText: _amountError,
-                border: const OutlineInputBorder(),
+              const Spacer(),
+              FittedBox(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '₦',
+                        style: theme.textTheme.headlineMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                      TextSpan(text: _display),
+                    ],
+                  ),
+                  key: const Key('amount'),
+                  style: theme.textTheme.displaySmall?.copyWith(fontSize: 48),
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              key: const Key('narration'),
-              controller: _narration,
-              maxLength: 100,
-              decoration: const InputDecoration(labelText: "What's it for? (optional)", border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 8),
-            FilledButton(
-              key: const Key('review'),
-              onPressed: ready ? _review : null,
-              child: _busy
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Review'),
-            ),
-          ],
+              const SizedBox(height: 6),
+              Text(
+                over
+                    ? 'More than your balance'
+                    : w == null
+                    ? ' '
+                    : 'Balance: ${formatNaira(w.balance)}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: over ? theme.colorScheme.error : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final n in [1000, 2000, 5000, 10000])
+                    ActionChip(
+                      label: Text(formatNaira(n * 100).replaceAll('.00', '')),
+                      onPressed: () => setState(() => _typed = '$n'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                key: const Key('narration'),
+                controller: _note,
+                maxLength: 100,
+                decoration: const InputDecoration(
+                  hintText: "What's it for? (optional)",
+                  prefixIcon: Icon(Icons.edit_note_rounded),
+                  counterText: '',
+                ),
+              ),
+              const Spacer(),
+              NumberPad(
+                onDigit: _digit,
+                extra: '.',
+                onExtra: _dot,
+                onBackspace: () {
+                  if (_typed.isNotEmpty) setState(() => _typed = _typed.substring(0, _typed.length - 1));
+                },
+              ),
+              const SizedBox(height: 8),
+              PrimaryButton(
+                key: const Key('review'),
+                label: 'Continue',
+                loading: _busy,
+                onPressed: amount == null || over ? null : _review,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// Shows exactly what will leave the wallet, then takes the PIN. The
-/// idempotency key is made once per review, so tapping Send twice (or
-/// retrying after a dropped connection) can never send twice.
-class _ReviewSheet extends StatefulWidget {
-  const _ReviewSheet({
-    required this.api,
-    required this.bank,
-    required this.accountNumber,
-    required this.accountName,
-    required this.narration,
-    required this.quote,
+/// Review what will happen, then approve with the PIN on a number pad.
+///
+/// The idempotency key is made once per sheet, so a double tap or a retry
+/// after a dropped connection can never pay twice. [action] gets the PIN
+/// and that key and returns the result, which the sheet pops with.
+class ConfirmSheet<T> extends StatefulWidget {
+  const ConfirmSheet({
+    super.key,
+    required this.title,
+    required this.avatar,
+    required this.headline,
+    required this.rows,
+    required this.action,
+    this.footnote,
   });
 
-  final AvoraApi api;
-  final Bank bank;
-  final String accountNumber;
-  final String accountName;
-  final String narration;
-  final Quote quote;
+  final String title;
+  final String avatar;
+  final String headline;
+  final List<(String, String)> rows;
+  final String? footnote;
+  final Future<T> Function(String pin, String idempotencyKey) action;
 
   @override
-  State<_ReviewSheet> createState() => _ReviewSheetState();
+  State<ConfirmSheet<T>> createState() => _ConfirmSheetState<T>();
 }
 
-class _ReviewSheetState extends State<_ReviewSheet> {
-  final _pin = TextEditingController();
+class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
   final _key = randomId();
+  bool _askPin = false;
+  String _pin = '';
   bool _sending = false;
   String? _error;
+  int _errorTick = 0;
 
-  @override
-  void dispose() {
-    _pin.dispose();
-    super.dispose();
-  }
-
-  Future<void> _send() async {
-    final pin = _pin.text.trim();
-    if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
-      setState(() => _error = 'Enter your 6-digit PIN');
-      return;
-    }
+  Future<void> _digit(String d) async {
+    if (_sending || _pin.length >= 6) return;
     setState(() {
-      _sending = true;
+      _pin += d;
       _error = null;
     });
+    if (_pin.length < 6) return;
+    setState(() => _sending = true);
     try {
-      final t = await widget.api.send(
-        bankCode: widget.bank.code,
-        accountNumber: widget.accountNumber,
-        amount: widget.quote.amount,
-        narration: widget.narration,
-        pin: pin,
-        idempotencyKey: _key,
-      );
-      if (mounted) Navigator.of(context).pop(t);
+      final result = await widget.action(_pin, _key);
+      if (mounted) Navigator.of(context).pop(result);
     } catch (e) {
       if (!mounted) return;
+      HapticFeedback.heavyImpact();
       setState(() {
         _sending = false;
+        _pin = '';
+        _errorTick++;
         _error = e is ApiException ? e.message : 'Something went wrong. Please try again.';
-        _pin.clear();
       });
     }
   }
@@ -258,66 +550,79 @@ class _ReviewSheetState extends State<_ReviewSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final q = widget.quote;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(24, 0, 24, 24 + MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Confirm transfer', style: theme.textTheme.titleLarge),
-          const SizedBox(height: 16),
-          _row('To', widget.accountName),
-          _row('Account', '${widget.accountNumber} · ${widget.bank.name}'),
-          if (widget.narration.isNotEmpty) _row('For', widget.narration),
-          const Divider(height: 24),
-          _row('Amount', formatNaira(q.amount)),
-          _row('Fee', q.fee == 0 ? 'Free' : formatNaira(q.fee)),
-          _row('Total', formatNaira(q.total), bold: true),
-          const SizedBox(height: 4),
-          Text(
-            q.fee == 0
-                ? 'This one is free. You have ${q.freeTransfersLeft} free transfer${q.freeTransfersLeft == 1 ? '' : 's'} left this month.'
-                : "You've used your free transfers this month.",
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            key: const Key('send-pin'),
-            controller: _pin,
-            autofocus: true,
-            obscureText: true,
-            maxLength: 6,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(labelText: 'PIN', errorText: _error, border: const OutlineInputBorder()),
-            onSubmitted: (_) => _send(),
-          ),
-          FilledButton(
-            key: const Key('confirm'),
-            onPressed: _sending ? null : _send,
-            child: _sending
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : Text('Send ${formatNaira(q.amount)}'),
-          ),
-        ],
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        child: AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          child: _askPin ? _pinStep(theme) : _summary(theme),
+        ),
       ),
     );
   }
 
-  Widget _row(String label, String value, {bool bold = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(width: 80, child: Text(label)),
-        Expanded(
-          child: Text(
-            value,
-            textAlign: TextAlign.end,
-            style: bold ? const TextStyle(fontWeight: FontWeight.bold) : null,
-          ),
+  Widget _summary(ThemeData theme) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      InitialsAvatar(text: widget.avatar, size: 56),
+      const SizedBox(height: 10),
+      Text(widget.title, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+      Text(widget.headline, style: theme.textTheme.headlineMedium),
+      const SizedBox(height: 16),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(color: theme.inputDecorationTheme.fillColor, borderRadius: BorderRadius.circular(18)),
+        child: Column(
+          children: [
+            for (final (i, (l, v)) in widget.rows.indexed)
+              DetailRow(label: l, value: v, bold: i == widget.rows.length - 1),
+          ],
+        ),
+      ),
+      if (widget.footnote != null) ...[
+        const SizedBox(height: 10),
+        Text(
+          widget.footnote!,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
       ],
-    ),
+      const SizedBox(height: 20),
+      PrimaryButton(key: const Key('confirm'), label: 'Confirm', onPressed: () => setState(() => _askPin = true)),
+    ],
+  );
+
+  Widget _pinStep(ThemeData theme) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text('Enter your PIN', style: theme.textTheme.titleLarge),
+      const SizedBox(height: 4),
+      Text(
+        'to approve ${widget.headline}',
+        style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
+      const SizedBox(height: 24),
+      PinDots(key: const Key('send-pin'), filled: _pin.length, errorTick: _errorTick),
+      SizedBox(
+        height: 44,
+        child: Center(
+          child: _sending
+              ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
+              : _error == null
+              ? null
+              : Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
+                ),
+        ),
+      ),
+      NumberPad(
+        onDigit: _digit,
+        onBackspace: () {
+          if (_pin.isNotEmpty && !_sending) setState(() => _pin = _pin.substring(0, _pin.length - 1));
+        },
+      ),
+    ],
   );
 }

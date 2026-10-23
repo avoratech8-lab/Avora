@@ -120,6 +120,40 @@ class HttpAvoraApi implements AvoraApi {
   Future<Transfer> transfer(String id) async => Transfer.fromJson(await _call('GET', '/v1/transfers/$id'));
 
   @override
+  Future<List<Biller>> billers() async {
+    final j = await _call('GET', '/v1/bills/billers');
+    return [for (final b in j['billers'] as List) Biller.fromJson(b as Map<String, dynamic>)];
+  }
+
+  @override
+  Future<String> validateBillCustomer({required String billerId, required String customer}) async {
+    final j = await _call('POST', '/v1/bills/validate', body: {'biller_id': billerId, 'customer': customer});
+    return j['customer_name'] as String;
+  }
+
+  @override
+  Future<BillPayment> payBill({
+    required String billerId,
+    String? planCode,
+    required String customer,
+    required int amount,
+    required String pin,
+    required String idempotencyKey,
+  }) async {
+    final j = await _call(
+      'POST',
+      '/v1/bills/payments',
+      body: {'biller_id': billerId, 'plan_code': ?planCode, 'customer': customer, 'amount': amount, 'pin': pin},
+      headers: {'Idempotency-Key': idempotencyKey},
+    );
+    return BillPayment.fromJson(j as Map<String, dynamic>);
+  }
+
+  @override
+  Future<BillPayment> billPayment(String id) async =>
+      BillPayment.fromJson(await _call('GET', '/v1/bills/payments/$id'));
+
+  @override
   Future<void> logout() async {
     try {
       await _call('POST', '/v1/auth/logout');

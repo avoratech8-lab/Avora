@@ -16,6 +16,7 @@ import (
 
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
+	"avora/backend/internal/bills"
 	"avora/backend/internal/rails"
 	"avora/backend/internal/testdb"
 	"avora/backend/internal/transfers"
@@ -65,6 +66,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	s := &api.Server{
 		DB: pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
+		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
 		Auth: auth.NewService(pool, sms, acfg, func(context.Context, string) (string, error) {
 			n := nubans[0]
 			nubans = nubans[1:]
@@ -229,6 +231,71 @@ func TestNewDeviceLimit(t *testing.T) {
 	body["amount"] = 50_000_00
 	if code, e := first.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "c"}); code != http.StatusOK {
 		t.Errorf("old phone transfer: %d %v", code, e)
+	}
+}
+
+func TestBills(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 9_000_00)
+
+	code, list := ada.call("GET", "/v1/bills/billers", nil, nil)
+	if code != http.StatusOK || len(list["billers"].([]any)) < 10 {
+		t.Fatalf("billers: %d %v", code, list)
+	}
+	code, v := ada.call("POST", "/v1/bills/validate", map[string]string{"biller_id": "ikedc", "customer": "45123456781"}, nil)
+	if code != http.StatusOK || v["customer_name"] == "" {
+		t.Fatalf("validate: %d %v", code, v)
+	}
+	if code, _ := ada.call("POST", "/v1/bills/validate", map[string]string{"biller_id": "ikedc", "customer": "45123456788"}, nil); code != http.StatusNotFound {
+		t.Errorf("unknown meter: %d", code)
+	}
+
+	body := map[string]any{"biller_id": "mtn-data", "plan_code": "mtn-2gb-7d", "customer": "08031234567", "pin": "000001"}
+	if code, _ := ada.call("POST", "/v1/bills/payments", body, map[string]string{"Idempotency-Key": "b1"}); code != http.StatusUnauthorized {
+		t.Errorf("wrong PIN: %d", code)
+	}
+	body["pin"] = "482915"
+	code, pay := ada.call("POST", "/v1/bills/payments", body, map[string]string{"Idempotency-Key": "b1"})
+	if code != http.StatusOK || pay["status"] != "success" || pay["amount"] != float64(1_500_00) {
+		t.Fatalf("pay: %d %v", code, pay)
+	}
+	if code, again := ada.call("GET", "/v1/bills/payments/"+pay["id"].(string), nil, nil); code != http.StatusOK || again["id"] != pay["id"] {
+		t.Errorf("get: %d %v", code, again)
+	}
+	_, w := ada.call("GET", "/v1/me/wallet", nil, nil)
+	if w["balance"] != float64(7_500_00) {
+		t.Errorf("balance = %v", w["balance"])
+	}
+
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08099999999", "570264")
+	if code, _ := bola.call("GET", "/v1/bills/payments/"+pay["id"].(string), nil, nil); code != http.StatusNotFound {
+		t.Errorf("other user's payment: %d", code)
+	}
+}
+
+func TestNewDeviceLimitCountsBills(t *testing.T) {
+	srv, sms := newServer(t)
+	first := &client{t: t, srv: srv, sms: sms, device: "old-phone"}
+	first.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 100_000_00)
+
+	newPhone := &client{t: t, srv: srv, sms: sms, device: "new-phone"}
+	newPhone.signIn("08031234567", "482915")
+	tv := map[string]any{"biller_id": "dstv", "plan_code": "dstv-compact", "customer": "1234567891", "pin": "482915"}
+	if code, e := newPhone.call("POST", "/v1/bills/payments", tv, map[string]string{"Idempotency-Key": "tv"}); code != http.StatusOK {
+		t.Fatalf("tv: %d %v", code, e)
+	}
+	body := map[string]any{"bank_code": "058", "account_number": "0123456781", "amount": 2_000_00, "pin": "482915"}
+	if code, e := newPhone.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "t"}); code != http.StatusForbidden {
+		t.Errorf("transfer over limit after bills: %d %v", code, e)
+	}
+	// The plan's price counts, whatever amount the client sends.
+	tv["plan_code"], tv["amount"] = "dstv-premium", 1
+	if code, e := newPhone.call("POST", "/v1/bills/payments", tv, map[string]string{"Idempotency-Key": "tv2"}); code != http.StatusForbidden {
+		t.Errorf("premium over limit: %d %v", code, e)
 	}
 }
 

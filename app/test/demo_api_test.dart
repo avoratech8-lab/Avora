@@ -86,4 +86,57 @@ void main() {
       throwsA(isA<ApiException>().having((e) => e.code, 'code', 'insufficient_funds')),
     );
   });
+
+  test('bills: plans set the price, failures refund, the same key pays once', () async {
+    final billers = await api.billers();
+    expect(billers.where((b) => b.category == BillCategory.tv), hasLength(3));
+
+    final tv = await api.payBill(
+      billerId: 'gotv',
+      planCode: 'gotv-max',
+      customer: '1234567891',
+      amount: 1,
+      pin: '135790',
+      idempotencyKey: 'tv',
+    );
+    expect(tv.amount, 850000);
+    expect(tv.status, BillStatus.success);
+    final again = await api.payBill(
+      billerId: 'gotv',
+      planCode: 'gotv-max',
+      customer: '1234567891',
+      amount: 1,
+      pin: '135790',
+      idempotencyKey: 'tv',
+    );
+    expect(again.id, tv.id);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 850000);
+
+    final failed = await api.payBill(
+      billerId: 'mtn-airtime',
+      customer: '08031234560',
+      amount: 10000,
+      pin: '135790',
+      idempotencyKey: 'a',
+    );
+    expect(failed.status, BillStatus.refunded);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 850000);
+
+    final light = await api.payBill(
+      billerId: 'ikedc',
+      customer: '45123456781',
+      amount: 500000,
+      pin: '135790',
+      idempotencyKey: 'e',
+    );
+    expect(light.token, hasLength(24));
+
+    await expectLater(
+      api.validateBillCustomer(billerId: 'dstv', customer: '1234567898'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'customer_not_found')),
+    );
+    final lines = await api.statement();
+    expect(lines.first.kind, 'bill_payment');
+    expect(lines.first.description, 'Ikeja Electric · meter 45123456781');
+  });
 }

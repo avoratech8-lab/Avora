@@ -25,6 +25,22 @@ abstract class AvoraApi {
     required String idempotencyKey,
   });
   Future<Transfer> transfer(String id);
+
+  /// Networks, DisCos and TV providers.
+  Future<List<Biller>> billers();
+
+  /// The name on a meter or smartcard, so the customer can check it.
+  Future<String> validateBillCustomer({required String billerId, required String customer});
+
+  Future<BillPayment> payBill({
+    required String billerId,
+    String? planCode,
+    required String customer,
+    required int amount,
+    required String pin,
+    required String idempotencyKey,
+  });
+  Future<BillPayment> billPayment(String id);
   Future<void> logout();
 }
 

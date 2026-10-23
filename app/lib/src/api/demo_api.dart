@@ -3,6 +3,7 @@ import 'dart:async';
 import '../credentials.dart';
 import '../ids.dart';
 import 'api.dart';
+import 'bill_catalog.dart';
 import 'models.dart';
 
 /// An in-memory stand-in for the backend, so the app can be tried with no
@@ -12,7 +13,9 @@ import 'models.dart';
 /// * new customers get a ₦50,000 demo credit;
 /// * account numbers ending in 8 are not found, 0 are declined and refunded,
 ///   9 stay with the bank for a few seconds, and anything else is delivered;
-/// * 5 free transfers a month, then ₦10 each.
+/// * 5 free transfers a month, then ₦10 each;
+/// * bills: meter or smartcard numbers ending in 8 are not found, and a
+///   phone, meter or smartcard ending in 0 fails and is refunded.
 class DemoAvoraApi implements AvoraApi {
   DemoAvoraApi({required this.credentials, DateTime Function()? clock, this.pendingFor = const Duration(seconds: 6)})
     : _now = clock ?? DateTime.now;
@@ -211,6 +214,103 @@ class DemoAvoraApi implements AvoraApi {
     return _settle(u, t);
   }
 
+  final _billers = demoBillers();
+
+  Biller _biller(String id) => _billers.firstWhere(
+    (b) => b.id == id,
+    orElse: () => throw ApiException('invalid_request', 'Unknown biller.', status: 400),
+  );
+
+  @override
+  Future<List<Biller>> billers() async {
+    _me;
+    return _billers;
+  }
+
+  @override
+  Future<String> validateBillCustomer({required String billerId, required String customer}) async {
+    _me;
+    final b = _biller(billerId);
+    final digits = RegExp(r'^\d{10,13}$').hasMatch(customer);
+    if (!digits || (b.needsLookup && customer.endsWith('8'))) {
+      throw ApiException('customer_not_found', 'We could not find that ${b.customerLabel.toLowerCase()}.', status: 404);
+    }
+    return b.needsLookup ? 'DEMO CUSTOMER ${customer.substring(customer.length - 4)}' : '';
+  }
+
+  @override
+  Future<BillPayment> payBill({
+    required String billerId,
+    String? planCode,
+    required String customer,
+    required int amount,
+    required String pin,
+    required String idempotencyKey,
+  }) async {
+    final u = _me;
+    final existing = u.billsByKey[idempotencyKey];
+    if (existing != null) return u.bills[existing]!;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+
+    final b = _biller(billerId);
+    BillPlan? plan;
+    if (b.hasPlans) {
+      plan = b.plans.firstWhere(
+        (p) => p.code == planCode,
+        orElse: () => throw ApiException('invalid_request', 'Choose a plan.', status: 400),
+      );
+      amount = plan.amount;
+    } else if (amount < b.minAmount || amount > b.maxAmount) {
+      throw ApiException('invalid_request', 'Amount must be between the minimum and maximum.', status: 400);
+    }
+    final name = await validateBillCustomer(billerId: billerId, customer: customer);
+    if (amount > u.balance) {
+      throw ApiException('insufficient_funds', 'Your balance is too low for this payment.', status: 422);
+    }
+
+    final id = randomId();
+    final failed = customer.endsWith('0');
+    final what = billDescription(b, plan?.name ?? '', customer);
+    final pay = BillPayment(
+      id: id,
+      billerId: b.id,
+      billerName: b.name,
+      category: b.category,
+      planName: plan?.name ?? '',
+      customer: customer,
+      customerName: name,
+      amount: amount,
+      status: failed ? BillStatus.refunded : BillStatus.success,
+      token: !failed && b.category == BillCategory.electricity ? _token() : '',
+      reference: 'DEMOBILL${id.substring(0, 10).toUpperCase()}',
+      failureReason: failed ? 'biller declined' : '',
+      createdAt: _now(),
+    );
+    u.balance -= amount;
+    u.lines.add(StatementLine(kind: 'bill_payment', description: what, ref: id, amount: -amount, at: pay.createdAt));
+    if (failed) {
+      u.balance += amount;
+      u.lines.add(
+        StatementLine(kind: 'bill_refund', description: 'Refund: $what', ref: id, amount: amount, at: _now()),
+      );
+    }
+    u.bills[id] = pay;
+    u.billsByKey[idempotencyKey] = id;
+    return pay;
+  }
+
+  String _token() {
+    final digits = randomId().codeUnits.map((c) => c % 10).take(20).join();
+    return [for (var i = 0; i < 20; i += 4) digits.substring(i, i + 4)].join('-');
+  }
+
+  @override
+  Future<BillPayment> billPayment(String id) async {
+    final p = _me.bills[id];
+    if (p == null) throw ApiException('not_found', 'Not found.', status: 404);
+    return p;
+  }
+
   @override
   Future<void> logout() async {
     _tokens.remove(credentials.token);
@@ -228,4 +328,14 @@ class _DemoUser {
   final lines = <StatementLine>[];
   final transfers = <String, Transfer>{};
   final byKey = <String, String>{};
+  final bills = <String, BillPayment>{};
+  final billsByKey = <String, String>{};
 }
+
+/// How a bill payment reads on the statement; the backend uses the same words.
+String billDescription(Biller b, String plan, String customer) => switch (b.category) {
+  BillCategory.airtime => '${b.name} airtime · $customer',
+  BillCategory.data => '${b.name} data $plan · $customer',
+  BillCategory.electricity => '${b.name} · meter $customer',
+  BillCategory.tv => '${b.name} $plan · $customer',
+};

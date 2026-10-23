@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"avora/backend/internal/auth"
+	"avora/backend/internal/bills"
 	"avora/backend/internal/inbound"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/rails"
@@ -38,6 +39,7 @@ type Server struct {
 	Rail          rails.Rail
 	System        wallets.System
 	Transfers     *transfers.Service
+	Bills         *bills.Service
 	Auth          *auth.Service
 	WebhookSecret string
 	OpsKey        string
@@ -66,6 +68,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/transfers", s.signedIn(s.createTransfer))
 	mux.HandleFunc("GET /v1/transfers/quote", s.signedIn(s.quoteTransfer))
 	mux.HandleFunc("GET /v1/transfers/{id}", s.signedIn(s.getTransfer))
+
+	mux.HandleFunc("GET /v1/bills/billers", s.signedIn(s.listBillers))
+	mux.HandleFunc("POST /v1/bills/validate", s.signedIn(s.validateBill))
+	mux.HandleFunc("POST /v1/bills/payments", s.signedIn(s.payBill))
+	mux.HandleFunc("GET /v1/bills/payments/{id}", s.signedIn(s.getBillPayment))
 
 	mux.HandleFunc("POST /v1/webhooks/inbound-credit", s.inboundCredit)
 	mux.HandleFunc("POST /v1/ops/transfers/{id}/resolve", s.opsOnly(s.resolveTransfer))
@@ -205,18 +212,8 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if ends := p.NewDeviceWindowEnds(s.Auth.Config()); s.Now().Before(ends) {
-		sent, err := s.Transfers.SentSince(r.Context(), p.WalletID, p.DeviceBoundAt)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		if limit := s.Auth.Config().NewDeviceLimit; sent+body.Amount > limit {
-			writeError(w, http.StatusForbidden, "new_device_limit", fmt.Sprintf(
-				"For your safety, a newly added phone can send up to ₦%d in its first 24 hours. The limit lifts at %s.",
-				limit/100, ends.In(lagos).Format("3:04 PM on 2 Jan")))
-			return
-		}
+	if !s.withinNewDeviceLimit(w, r, p, body.Amount) {
+		return
 	}
 	t, err := s.Transfers.Initiate(r.Context(), transfers.InitiateRequest{
 		IdempotencyKey:  r.Header.Get("Idempotency-Key"),
@@ -234,6 +231,100 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 }
 
 var lagos = time.FixedZone("WAT", 60*60)
+
+// withinNewDeviceLimit caps what a newly added phone can move (transfers and
+// bills together) in its first 24 hours. It writes the error when it fails.
+func (s *Server) withinNewDeviceLimit(w http.ResponseWriter, r *http.Request, p auth.Principal, amount int64) bool {
+	ends := p.NewDeviceWindowEnds(s.Auth.Config())
+	if !s.Now().Before(ends) {
+		return true
+	}
+	sent, err := s.Transfers.SentSince(r.Context(), p.WalletID, p.DeviceBoundAt)
+	if err != nil {
+		s.fail(w, err)
+		return false
+	}
+	var spent int64
+	if s.Bills != nil {
+		if spent, err = s.Bills.SpentSince(r.Context(), p.WalletID, p.DeviceBoundAt); err != nil {
+			s.fail(w, err)
+			return false
+		}
+	}
+	if limit := s.Auth.Config().NewDeviceLimit; sent+spent+amount > limit {
+		writeError(w, http.StatusForbidden, "new_device_limit", fmt.Sprintf(
+			"For your safety, a newly added phone can send up to ₦%d in its first 24 hours. The limit lifts at %s.",
+			limit/100, ends.In(lagos).Format("3:04 PM on 2 Jan")))
+		return false
+	}
+	return true
+}
+
+func (s *Server) listBillers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"billers": s.Bills.Billers()})
+}
+
+func (s *Server) validateBill(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		BillerID string `json:"biller_id"`
+		Customer string `json:"customer"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	name, err := s.Bills.Validate(r.Context(), body.BillerID, body.Customer)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"customer_name": name})
+}
+
+func (s *Server) payBill(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		BillerID string `json:"biller_id"`
+		PlanCode string `json:"plan_code"`
+		Customer string `json:"customer"`
+		Amount   int64  `json:"amount"`
+		PIN      string `json:"pin"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	p := principal(r)
+	if err := s.Auth.CheckPIN(r.Context(), p.UserID, body.PIN); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !s.withinNewDeviceLimit(w, r, p, s.Bills.Price(body.BillerID, body.PlanCode, body.Amount)) {
+		return
+	}
+	pay, err := s.Bills.Pay(r.Context(), bills.PayRequest{
+		IdempotencyKey:  r.Header.Get("Idempotency-Key"),
+		WalletAccountID: p.WalletID,
+		BillerID:        body.BillerID,
+		PlanCode:        body.PlanCode,
+		Customer:        body.Customer,
+		Amount:          body.Amount,
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pay)
+}
+
+func (s *Server) getBillPayment(w http.ResponseWriter, r *http.Request) {
+	pay, err := s.Bills.Get(r.Context(), r.PathValue("id"))
+	if err == nil && pay.WalletAccountID != principal(r).WalletID {
+		err = bills.ErrNotFound // never reveal other users' payments
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pay)
+}
 
 func (s *Server) quoteTransfer(w http.ResponseWriter, r *http.Request) {
 	amount, err := strconv.ParseInt(r.URL.Query().Get("amount"), 10, 64)
@@ -332,14 +423,16 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, auth.ErrInvalidPhone), errors.Is(err, auth.ErrWeakPIN), errors.Is(err, auth.ErrInvalidDevice):
 		writeError(w, http.StatusBadRequest, "invalid_request", strings.TrimPrefix(err.Error(), "auth: "))
 	case errors.Is(err, ledger.ErrInsufficientFunds):
-		writeError(w, http.StatusUnprocessableEntity, "insufficient_funds", "Your balance is too low for this transfer and its fee.")
-	case errors.Is(err, transfers.ErrInvalid), errors.Is(err, inbound.ErrInvalid):
+		writeError(w, http.StatusUnprocessableEntity, "insufficient_funds", "Your balance is too low for this payment, including any fee.")
+	case errors.Is(err, bills.ErrCustomerNotFound):
+		writeError(w, http.StatusNotFound, "customer_not_found", "We could not find that number. Check it and try again.")
+	case errors.Is(err, transfers.ErrInvalid), errors.Is(err, inbound.ErrInvalid), errors.Is(err, bills.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-	case errors.Is(err, transfers.ErrIdempotencyConflict):
+	case errors.Is(err, transfers.ErrIdempotencyConflict), errors.Is(err, bills.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
 	case errors.Is(err, transfers.ErrNotResolvable):
 		writeError(w, http.StatusConflict, "not_resolvable", err.Error())
-	case errors.Is(err, wallets.ErrNotFound), errors.Is(err, transfers.ErrNotFound):
+	case errors.Is(err, wallets.ErrNotFound), errors.Is(err, transfers.ErrNotFound), errors.Is(err, bills.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Not found.")
 	default:
 		s.Log.Error("request failed", "err", err)
