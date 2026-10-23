@@ -296,6 +296,56 @@ class HttpAvoraApi implements AvoraApi {
   };
 
   @override
+  Future<CardList> cards() async => CardList.fromJson(await _call('GET', '/v1/cards'));
+
+  @override
+  Future<VirtualCard> createCard(String name) async =>
+      VirtualCard.fromJson(await _call('POST', '/v1/cards', body: {'name': name}));
+
+  @override
+  Future<VirtualCard> freezeCard(String id, bool frozen) async =>
+      VirtualCard.fromJson(await _call('POST', '/v1/cards/$id/freeze', body: {'frozen': frozen}));
+
+  @override
+  Future<VirtualCard> setCardLimit(String id, int amount) async =>
+      VirtualCard.fromJson(await _call('PUT', '/v1/cards/$id/limit', body: {'amount': amount}));
+
+  @override
+  Future<CardDetails> cardDetails(String id, String pin) async =>
+      CardDetails.fromJson(await _call('POST', '/v1/cards/$id/details', body: {'pin': pin}));
+
+  @override
+  Future<void> closeCard(String id, String pin) => _call('POST', '/v1/cards/$id/terminate', body: {'pin': pin});
+
+  @override
+  Future<List<CardPayment>> cardPayments(String id) async {
+    final j = await _call('GET', '/v1/cards/$id/payments');
+    return [for (final p in (j['payments'] as List? ?? const [])) CardPayment.fromJson(p as Map<String, dynamic>)];
+  }
+
+  @override
+  Future<CardPayment> testCardPayment(
+    String id, {
+    required String merchant,
+    required int amount,
+    required String key,
+  }) async => CardPayment.fromJson(
+    await _call(
+      'POST',
+      '/v1/sandbox/cards/$id/charge',
+      body: {'merchant': merchant, 'amount': amount},
+      headers: {'Idempotency-Key': key},
+    ),
+  );
+
+  @override
+  Future<RoundUp> roundUp() async => RoundUp.fromJson(await _call('GET', '/v1/me/roundup'));
+
+  @override
+  Future<RoundUp> setRoundUp({required String potId, required int step}) async =>
+      RoundUp.fromJson(await _call('PUT', '/v1/me/roundup', body: {'pot_id': potId, 'step': step}));
+
+  @override
   Future<ReferralSummary> referrals() async => ReferralSummary.fromJson(await _call('GET', '/v1/me/referrals'));
 
   @override

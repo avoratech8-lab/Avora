@@ -20,6 +20,7 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/cards"
 	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/p2p"
@@ -89,6 +90,8 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 		Support:   support.NewService(pool),
 		P2P:       p2p.NewService(pool),
 		Insights:  insights.NewService(pool),
+		Cards:     cards.NewService(pool, sys, []byte("card-secret")),
+		Sandbox:   true,
 		DB:        pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
@@ -720,5 +723,70 @@ func TestInsightsAndBudgets(t *testing.T) {
 	}
 	if titles["80% of your data budget used"] != 1 || titles["You've reached your monthly budget"] != 1 {
 		t.Fatalf("notifications = %v", titles)
+	}
+}
+
+func TestCardsAndRoundUps(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 20_000_00)
+
+	_, pot := ada.call("POST", "/v1/savings", map[string]any{"kind": "goal", "name": "Change jar"}, map[string]string{"Idempotency-Key": "pot"})
+	if code, ru := ada.call("PUT", "/v1/me/roundup", map[string]any{"pot_id": pot["id"], "step": 100_00}, nil); code != http.StatusOK || ru["pot_id"] != pot["id"] {
+		t.Fatalf("round-up: %d %v", code, ru)
+	}
+
+	code, c := ada.call("POST", "/v1/cards", map[string]any{"name": "Online"}, nil)
+	if code != http.StatusOK || c["status"] != "active" {
+		t.Fatalf("create card: %d %v", code, c)
+	}
+	id := c["id"].(string)
+	if code, _ := ada.call("POST", "/v1/cards/"+id+"/details", map[string]any{"pin": "000001"}, nil); code != http.StatusUnauthorized {
+		t.Errorf("details with a wrong PIN: %d", code)
+	}
+	if code, d := ada.call("POST", "/v1/cards/"+id+"/details", map[string]any{"pin": "482915"}, nil); code != http.StatusOK || len(d["number"].(string)) != 16 {
+		t.Errorf("details: %d %v", code, d)
+	}
+
+	charge := func(key string, amount int64) map[string]any {
+		t.Helper()
+		_, p := ada.call("POST", "/v1/sandbox/cards/"+id+"/charge", map[string]any{"merchant": "Jumia", "amount": amount},
+			map[string]string{"Idempotency-Key": key})
+		return p
+	}
+	if p := charge("c1", 2_450_00); p["status"] != "approved" {
+		t.Fatalf("charge: %v", p)
+	}
+	ada.call("POST", "/v1/cards/"+id+"/freeze", map[string]any{"frozen": true}, nil)
+	if p := charge("c2", 1_000_00); p["status"] != "declined" {
+		t.Fatalf("frozen charge: %v", p)
+	}
+
+	// ₦2,450 rounds up to ₦2,500, so ₦50 goes to the jar.
+	_, w := ada.call("GET", "/v1/me/wallet", nil, nil)
+	if w["balance"] != float64(20_000_00-50_00-2_450_00-50_00) {
+		t.Errorf("balance = %v", w["balance"])
+	}
+	_, pots := ada.call("GET", "/v1/savings", nil, nil)
+	if b := pots["pots"].([]any)[0].(map[string]any)["balance"]; b != float64(50_00) {
+		t.Errorf("jar = %v", b)
+	}
+	_, m := ada.call("GET", "/v1/me/insights", nil, nil)
+	cat := m["categories"].([]any)[0].(map[string]any)
+	if cat["category"] != "cards" || cat["amount"] != float64(2_450_00) || m["saved"] != float64(50_00) {
+		t.Errorf("insights: %v", m)
+	}
+
+	other := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	other.signIn("08099999999", "570264")
+	if code, _ := other.call("POST", "/v1/cards/"+id+"/freeze", map[string]any{"frozen": false}, nil); code != http.StatusNotFound {
+		t.Errorf("someone else's card: %d", code)
+	}
+	if code, _ := ada.call("POST", "/v1/cards/"+id+"/terminate", map[string]any{"pin": "482915"}, nil); code != http.StatusNoContent {
+		t.Errorf("terminate: %d", code)
+	}
+	if _, list := ada.call("GET", "/v1/cards", nil, nil); len(list["cards"].([]any)) != 0 || list["max"] != float64(3) {
+		t.Errorf("cards after terminate: %v", list)
 	}
 }

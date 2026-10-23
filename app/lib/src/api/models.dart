@@ -544,6 +544,7 @@ class P2PTransfer {
 const spendCategories = [
   'transfers',
   'avora',
+  'cards',
   'airtime',
   'data',
   'electricity',
@@ -613,4 +614,121 @@ class Insights {
 
   int budgetFor(String category) =>
       category == allSpending ? budget : categories.where((c) => c.category == category).firstOrNull?.budget ?? 0;
+}
+
+enum CardStatus { active, frozen }
+
+/// A virtual card that spends straight from the wallet.
+class VirtualCard {
+  VirtualCard({
+    required this.id,
+    required this.name,
+    required this.brand,
+    required this.last4,
+    required this.expiry,
+    required this.status,
+    required this.monthlyLimit,
+    required this.spentThisMonth,
+  });
+
+  factory VirtualCard.fromJson(Map<String, dynamic> j) => VirtualCard(
+    id: j['id'] as String,
+    name: j['name'] as String,
+    brand: j['brand'] as String? ?? 'Verve',
+    last4: j['last4'] as String,
+    expiry: j['expiry'] as String,
+    status: j['status'] == 'frozen' ? CardStatus.frozen : CardStatus.active,
+    monthlyLimit: j['monthly_limit'] as int? ?? 0,
+    spentThisMonth: j['spent_this_month'] as int? ?? 0,
+  );
+
+  final String id;
+  final String name;
+  final String brand;
+  final String last4;
+  final String expiry; // MM/YY
+  final CardStatus status;
+  final int monthlyLimit; // 0 means none
+  final int spentThisMonth;
+
+  bool get frozen => status == CardStatus.frozen;
+}
+
+/// What's needed to pay online; shown only after the PIN.
+class CardDetails {
+  CardDetails({required this.number, required this.expiry, required this.cvv, required this.nameOnCard});
+
+  factory CardDetails.fromJson(Map<String, dynamic> j) => CardDetails(
+    number: j['number'] as String,
+    expiry: j['expiry'] as String,
+    cvv: j['cvv'] as String,
+    nameOnCard: j['name_on_card'] as String? ?? '',
+  );
+
+  final String number;
+  final String expiry;
+  final String cvv;
+  final String nameOnCard;
+
+  /// "5061 9912 3456 7890".
+  String get grouped => [for (var i = 0; i < number.length; i += 4) number.substring(i, i + 4)].join(' ');
+}
+
+class CardPayment {
+  CardPayment({
+    required this.id,
+    required this.merchant,
+    required this.amount,
+    required this.approved,
+    required this.declineReason,
+    required this.createdAt,
+  });
+
+  factory CardPayment.fromJson(Map<String, dynamic> j) => CardPayment(
+    id: j['id'] as String,
+    merchant: j['merchant'] as String,
+    amount: j['amount'] as int,
+    approved: j['status'] == 'approved',
+    declineReason: j['decline_reason'] as String? ?? '',
+    createdAt: DateTime.parse(j['created_at'] as String),
+  );
+
+  final String id;
+  final String merchant;
+  final int amount;
+  final bool approved;
+  final String declineReason;
+  final DateTime createdAt;
+}
+
+/// The list of cards, how many are allowed, and whether test payments can
+/// be made.
+class CardList {
+  CardList({required this.cards, required this.max, required this.sandbox});
+
+  factory CardList.fromJson(Map<String, dynamic> j) => CardList(
+    cards: [for (final c in (j['cards'] as List? ?? const [])) VirtualCard.fromJson(c as Map<String, dynamic>)],
+    max: j['max'] as int? ?? 3,
+    sandbox: j['sandbox'] as bool? ?? false,
+  );
+
+  final List<VirtualCard> cards;
+  final int max;
+  final bool sandbox;
+}
+
+/// Saving the change from each payment into a goal pot.
+class RoundUp {
+  const RoundUp({required this.potId, required this.step});
+
+  factory RoundUp.fromJson(Map<String, dynamic> j) =>
+      RoundUp(potId: j['pot_id'] as String? ?? '', step: j['step'] as int? ?? 10000);
+
+  final String potId; // '' when off
+  final int step; // kobo: 1000, 10000 or 100000
+
+  bool get on => potId.isNotEmpty;
+
+  /// What a payment of [amount] would save.
+  int extraFor(int amount) => !on || amount % step == 0 ? 0 : step - amount % step;
 }

@@ -28,6 +28,7 @@ import (
 
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/cards"
 	"avora/backend/internal/inbound"
 	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
@@ -43,16 +44,19 @@ import (
 )
 
 type Server struct {
-	DB            *pgxpool.Pool
-	Rail          rails.Rail
-	System        wallets.System
-	Transfers     *transfers.Service
-	Bills         *bills.Service
-	Savings       *savings.Service
-	KYC           *kyc.Service
-	Referrals     *referrals.Service
-	P2P           *p2p.Service
-	Insights      *insights.Service
+	DB        *pgxpool.Pool
+	Rail      rails.Rail
+	System    wallets.System
+	Transfers *transfers.Service
+	Bills     *bills.Service
+	Savings   *savings.Service
+	KYC       *kyc.Service
+	Referrals *referrals.Service
+	P2P       *p2p.Service
+	Insights  *insights.Service
+	Cards     *cards.Service
+	// Sandbox turns on test-only routes, such as making a card payment.
+	Sandbox       bool
 	Support       *support.Service
 	Auth          *auth.Service
 	WebhookSecret string
@@ -91,6 +95,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/me/insights", s.signedIn(s.monthInsights))
 	mux.HandleFunc("GET /v1/me/budgets", s.signedIn(s.listBudgets))
 	mux.HandleFunc("PUT /v1/me/budgets/{category}", s.signedIn(s.setBudget))
+	mux.HandleFunc("GET /v1/me/roundup", s.signedIn(s.getRoundUp))
+	mux.HandleFunc("PUT /v1/me/roundup", s.signedIn(s.setRoundUp))
+	mux.HandleFunc("GET /v1/cards", s.signedIn(s.listCards))
+	mux.HandleFunc("POST /v1/cards", s.signedIn(s.createCard))
+	mux.HandleFunc("POST /v1/cards/{id}/freeze", s.signedIn(s.freezeCard))
+	mux.HandleFunc("PUT /v1/cards/{id}/limit", s.signedIn(s.cardLimit))
+	mux.HandleFunc("POST /v1/cards/{id}/details", s.signedIn(s.cardDetails))
+	mux.HandleFunc("POST /v1/cards/{id}/terminate", s.signedIn(s.terminateCard))
+	mux.HandleFunc("GET /v1/cards/{id}/payments", s.signedIn(s.cardPayments))
+	if s.Sandbox {
+		mux.HandleFunc("POST /v1/sandbox/cards/{id}/charge", s.signedIn(s.sandboxCharge))
+	}
 	mux.HandleFunc("GET /v1/p2p/find", s.signedIn(s.findPerson))
 	mux.HandleFunc("POST /v1/p2p", s.signedIn(s.sendP2P))
 	mux.HandleFunc("GET /v1/p2p/{id}", s.signedIn(s.getP2P))
@@ -296,7 +312,7 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.budgetAlerts(r, p.WalletID)
+	s.afterSpend(r, p.WalletID, t.ID, t.Amount)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -512,7 +528,7 @@ func (s *Server) sendP2P(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.budgetAlerts(r, p.WalletID)
+	s.afterSpend(r, p.WalletID, t.ID, t.Amount)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -655,16 +671,178 @@ func (s *Server) payBill(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.budgetAlerts(r, p.WalletID)
+	if pay.Status != bills.Refunded {
+		s.afterSpend(r, p.WalletID, pay.ID, pay.Amount)
+	}
 	writeJSON(w, http.StatusOK, pay)
 }
 
-// budgetAlerts tells the customer when a payment takes a budget past 80% or
-// 100%. The payment has already gone through, so a failure here is logged.
-func (s *Server) budgetAlerts(r *http.Request, wallet int64) {
+// afterSpend saves the round-up from a payment and tells the customer when
+// it takes a budget past 80% or 100%. The payment has already gone through,
+// so a failure here is logged, not returned.
+func (s *Server) afterSpend(r *http.Request, wallet int64, ref string, amount int64) {
+	if _, err := s.Savings.RoundUp(r.Context(), wallet, ref, amount); err != nil {
+		s.Log.Error("round-up", "wallet", wallet, "ref", ref, "err", err)
+	}
 	if err := s.Insights.Alert(r.Context(), wallet); err != nil {
 		s.Log.Error("budget alerts", "wallet", wallet, "err", err)
 	}
+}
+
+func (s *Server) getRoundUp(w http.ResponseWriter, r *http.Request) {
+	ru, err := s.Savings.RoundUpSetting(r.Context(), principal(r).WalletID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ru)
+}
+
+func (s *Server) setRoundUp(w http.ResponseWriter, r *http.Request) {
+	var body savings.RoundUpSetting
+	if !readJSON(w, r, &body) {
+		return
+	}
+	ru, err := s.Savings.SetRoundUp(r.Context(), principal(r).WalletID, body.PotID, body.Step)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ru)
+}
+
+func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Cards.List(r.Context(), principal(r).WalletID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cards": list, "max": cards.MaxCards, "sandbox": s.Sandbox})
+}
+
+func (s *Server) createCard(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	c, err := s.Cards.Create(r.Context(), principal(r).WalletID, body.Name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) freezeCard(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Frozen bool `json:"frozen"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	c, err := s.Cards.SetFrozen(r.Context(), principal(r).WalletID, r.PathValue("id"), body.Frozen)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) cardLimit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Amount int64 `json:"amount"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	c, err := s.Cards.SetLimit(r.Context(), principal(r).WalletID, r.PathValue("id"), body.Amount)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// withPIN reads {"pin"} and checks it.
+func (s *Server) withPIN(w http.ResponseWriter, r *http.Request) bool {
+	var body struct {
+		PIN string `json:"pin"`
+	}
+	if !readJSON(w, r, &body) {
+		return false
+	}
+	if err := s.Auth.CheckPIN(r.Context(), principal(r).UserID, body.PIN); err != nil {
+		s.fail(w, err)
+		return false
+	}
+	return true
+}
+
+func (s *Server) cardDetails(w http.ResponseWriter, r *http.Request) {
+	if !s.withPIN(w, r) {
+		return
+	}
+	p := principal(r)
+	prof, err := s.P2P.Profile(r.Context(), p.UserID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	d, err := s.Cards.Details(r.Context(), p.WalletID, r.PathValue("id"), prof.Name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) terminateCard(w http.ResponseWriter, r *http.Request) {
+	if !s.withPIN(w, r) {
+		return
+	}
+	if err := s.Cards.Terminate(r.Context(), principal(r).WalletID, r.PathValue("id")); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) cardPayments(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Cards.Payments(r.Context(), principal(r).WalletID, r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"payments": list})
+}
+
+// sandboxCharge stands in for the card scheme so a card can be tried out:
+// it makes a payment at a test merchant, as if the customer had paid online.
+func (s *Server) sandboxCharge(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Merchant string `json:"merchant"`
+		Amount   int64  `json:"amount"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	p := principal(r)
+	id := r.PathValue("id")
+	if _, err := s.Cards.Get(r.Context(), p.WalletID, id); err != nil {
+		s.fail(w, err)
+		return
+	}
+	pay, err := s.Cards.Charge(r.Context(), id, r.Header.Get("Idempotency-Key"), body.Merchant, body.Amount)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if pay.Status == "approved" {
+		s.afterSpend(r, p.WalletID, pay.ID, pay.Amount)
+	}
+	writeJSON(w, http.StatusOK, pay)
 }
 
 func (s *Server) monthInsights(w http.ResponseWriter, r *http.Request) {
@@ -921,7 +1099,14 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "code_used", "You've already joined with an invite code.")
 	case errors.Is(err, referrals.ErrTooLate):
 		writeError(w, http.StatusConflict, "code_too_late", "Invite codes can only be added in your first 30 days.")
-	case errors.Is(err, referrals.ErrInvalid), errors.Is(err, support.ErrInvalid), errors.Is(err, insights.ErrInvalid):
+	case errors.Is(err, cards.ErrNotFound):
+		writeError(w, http.StatusNotFound, "card_not_found", "We couldn't find that card.")
+	case errors.Is(err, cards.ErrTooMany):
+		writeError(w, http.StatusConflict, "too_many_cards", fmt.Sprintf("You can have up to %d cards. Close one to make another.", cards.MaxCards))
+	case errors.Is(err, cards.ErrClosed):
+		writeError(w, http.StatusConflict, "card_closed", "That card is closed.")
+	case errors.Is(err, referrals.ErrInvalid), errors.Is(err, support.ErrInvalid), errors.Is(err, insights.ErrInvalid),
+		errors.Is(err, cards.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request", friendly(err))
 	case errors.Is(err, auth.ErrThisDevice):
 		writeError(w, http.StatusConflict, "this_device", "This is the phone you're using. Sign out instead.")

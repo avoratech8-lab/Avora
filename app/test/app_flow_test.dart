@@ -239,6 +239,8 @@ void main() {
     expect(find.text('Rent'), findsOneWidget);
     expect(find.text('10% of ₦100,000.00'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('Rent'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Rent'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('pot-add')));
@@ -252,7 +254,7 @@ void main() {
 
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('savings-total')), findsOneWidget);
+    expect(find.byKey(const Key('savings-total'), skipOffstage: false), findsOneWidget);
     expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 1500000);
   });
 
@@ -638,5 +640,64 @@ void main() {
     await tester.tap(find.byKey(const Key('month-prev')));
     await tester.pumpAndSettle();
     expect(find.textContaining('Nothing spent'), findsOneWidget);
+  });
+
+  testWidgets('get a card, see its number, freeze it, and watch a payment get declined', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Cards'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('card-create')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Netflix'));
+    await tester.tap(find.byKey(const Key('card-name-save')));
+    await tester.pumpAndSettle();
+    final card = (await api.cards()).cards.single;
+    expect(find.byKey(Key('card-${card.last4}')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('card-details')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    expect(
+      find.descendant(of: find.byKey(const Key('card-number')), matching: find.textContaining(card.last4)),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(200, 80)); // close the sheet
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('card-freeze')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('card-frozen')), findsOneWidget);
+
+    await tester.ensureVisible(find.byKey(const Key('card-test-pay')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('card-test-pay')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('merchant-Netflix')));
+    await tester.pumpAndSettle();
+    expect(find.text('Declined: card frozen'), findsOneWidget);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit);
+  });
+
+  testWidgets('turn on round-ups from Savings', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await api.createPot(kind: PotKind.goal, name: 'Change jar', idempotencyKey: 'p');
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Savings').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('roundup')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('₦1,000'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('roundup-save')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('next ₦1,000, into Change jar'), findsOneWidget);
+    expect((await api.roundUp()).step, 100000);
   });
 }

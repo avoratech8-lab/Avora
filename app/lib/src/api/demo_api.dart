@@ -196,7 +196,7 @@ class DemoAvoraApi implements AvoraApi {
     );
     u.transfers[id] = t;
     u.byKey[idempotencyKey] = id;
-    _budgetAlerts(u);
+    _afterSpend(u, id, amount);
     return transfer(id);
   }
 
@@ -361,7 +361,7 @@ class DemoAvoraApi implements AvoraApi {
     }
     u.bills[id] = pay;
     u.billsByKey[idempotencyKey] = id;
-    _budgetAlerts(u);
+    if (!failed) _afterSpend(u, id, amount);
     return pay;
   }
 
@@ -807,7 +807,7 @@ class DemoAvoraApi implements AvoraApi {
     other.p2p[id] = P2PTransfer(id: id, outgoing: false, amount: amount, note: n, other: _person(u), createdAt: at);
     u.p2pByKey[idempotencyKey] = id;
     _notify(other, 'money_in', '${formatNaira(amount)} received', 'From ${_who(u)}${n.isEmpty ? '' : ': $n'}', id);
-    _budgetAlerts(u);
+    _afterSpend(u, id, amount);
     return u.p2p[id]!;
   }
 
@@ -831,6 +831,7 @@ class DemoAvoraApi implements AvoraApi {
     'transfer_hold' || 'transfer_refund' => 'transfers',
     'bill_payment' || 'bill_refund' => u.bills[l.ref]?.category.name,
     'p2p_out' => 'avora',
+    'card_payment' => 'cards',
     'p2p_in' || 'savings_deposit' || 'savings_withdraw' || 'cashback' => null,
     _ => l.amount < 0 ? 'other' : null,
   };
@@ -877,6 +878,204 @@ class DemoAvoraApi implements AvoraApi {
       categories: cats,
       days: [for (final d in days) max(d, 0)],
     );
+  }
+
+  /// Saves the round-up from a payment, then checks budgets.
+  void _afterSpend(_DemoUser u, String ref, int amount) {
+    final r = u.roundUp;
+    final extra = r.extraFor(amount);
+    final pot = u.pots[r.potId];
+    if (extra > 0 && pot != null && pot.open && extra <= u.balance) {
+      _move(u, extra, 'savings_deposit', 'Round-up to ${pot.name}', pot.id);
+      u.pots[pot.id] = _pot(pot, balance: pot.balance + extra);
+    }
+    _budgetAlerts(u);
+  }
+
+  @override
+  Future<RoundUp> roundUp() async => _me.roundUp;
+
+  @override
+  Future<RoundUp> setRoundUp({required String potId, required int step}) async {
+    final u = _me;
+    if (potId.isEmpty) return u.roundUp = RoundUp(potId: '', step: u.roundUp.step);
+    if (![1000, 10000, 100000].contains(step)) {
+      throw ApiException('invalid_request', 'Round up to ₦10, ₦100 or ₦1,000.', status: 400);
+    }
+    final p = _ownPot(u, potId);
+    if (!p.open || p.kind != PotKind.goal) {
+      throw ApiException('invalid_request', 'Round-ups go into an open goal pot.', status: 400);
+    }
+    return u.roundUp = RoundUp(potId: potId, step: step);
+  }
+
+  static const maxCards = 3;
+
+  VirtualCard _card(_DemoUser u, String id) =>
+      u.cards[id] ?? (throw ApiException('card_not_found', "We couldn't find that card.", status: 404));
+
+  VirtualCard _withCard(VirtualCard c, {CardStatus? status, int? limit}) {
+    final month = DateTime(_now().year, _now().month);
+    return VirtualCard(
+      id: c.id,
+      name: c.name,
+      brand: c.brand,
+      last4: c.last4,
+      expiry: c.expiry,
+      status: status ?? c.status,
+      monthlyLimit: limit ?? c.monthlyLimit,
+      spentThisMonth: (_me.cardPayments[c.id] ?? const [])
+          .where((p) => p.approved && !p.createdAt.isBefore(month))
+          .fold(0, (a, p) => a + p.amount),
+    );
+  }
+
+  /// A Luhn-valid test number on a Verve range, and a CVV, from the card id.
+  (String, String) _cardNumber(String id) {
+    final d = id.codeUnits.map((c) => c % 10).join();
+    final partial = '506199${d.substring(0, 9)}';
+    var sum = 0;
+    for (var i = partial.length - 1; i >= 0; i--) {
+      var n = int.parse(partial[i]);
+      if ((partial.length - i).isOdd) {
+        n *= 2;
+        if (n > 9) n -= 9;
+      }
+      sum += n;
+    }
+    return ('$partial${(10 - sum % 10) % 10}', d.substring(9, 12));
+  }
+
+  @override
+  Future<CardList> cards() async {
+    final u = _me;
+    return CardList(cards: [for (final c in u.cards.values) _withCard(c)], max: maxCards, sandbox: true);
+  }
+
+  @override
+  Future<VirtualCard> createCard(String name) async {
+    final u = _me;
+    if (u.cards.length >= maxCards) {
+      throw ApiException(
+        'too_many_cards',
+        'You can have up to $maxCards cards. Close one to make another.',
+        status: 409,
+      );
+    }
+    final n = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).join(' ');
+    if (n.length > 24) throw ApiException('invalid_request', 'A card name is up to 24 characters.', status: 400);
+    final id = randomId();
+    final now = _now();
+    final c = VirtualCard(
+      id: id,
+      name: n.isEmpty ? 'Online card' : n,
+      brand: 'Verve',
+      last4: _cardNumber(id).$1.substring(12),
+      expiry: '${now.month.toString().padLeft(2, '0')}/${(now.year + 3) % 100}',
+      status: CardStatus.active,
+      monthlyLimit: 0,
+      spentThisMonth: 0,
+    );
+    return u.cards[id] = c;
+  }
+
+  @override
+  Future<VirtualCard> freezeCard(String id, bool frozen) async {
+    final u = _me;
+    return u.cards[id] = _withCard(_card(u, id), status: frozen ? CardStatus.frozen : CardStatus.active);
+  }
+
+  @override
+  Future<VirtualCard> setCardLimit(String id, int amount) async {
+    final u = _me;
+    if (amount < 0) throw ApiException('invalid_request', 'A limit cannot be negative.', status: 400);
+    return u.cards[id] = _withCard(_card(u, id), limit: amount);
+  }
+
+  @override
+  Future<CardDetails> cardDetails(String id, String pin) async {
+    final u = _me;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    final c = _card(u, id);
+    final (number, cvv) = _cardNumber(id);
+    return CardDetails(
+      number: number,
+      expiry: c.expiry,
+      cvv: cvv,
+      nameOnCard: (u.name.isEmpty ? 'Avora customer' : u.name).toUpperCase(),
+    );
+  }
+
+  @override
+  Future<void> closeCard(String id, String pin) async {
+    final u = _me;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    _card(u, id);
+    u.cards.remove(id);
+  }
+
+  @override
+  Future<List<CardPayment>> cardPayments(String id) async {
+    final u = _me;
+    _card(u, id);
+    return (u.cardPayments[id] ?? const []).reversed.toList();
+  }
+
+  @override
+  Future<CardPayment> testCardPayment(
+    String id, {
+    required String merchant,
+    required int amount,
+    required String key,
+  }) async {
+    final u = _me;
+    final seen = u.cardPaymentKeys['$id $key'];
+    if (seen != null) return seen;
+    final c = _withCard(_card(u, id));
+    final reason = c.frozen
+        ? 'card frozen'
+        : c.monthlyLimit > 0 && c.spentThisMonth + amount > c.monthlyLimit
+        ? 'over monthly limit'
+        : amount > u.balance
+        ? 'insufficient funds'
+        : '';
+    final p = CardPayment(
+      id: randomId(),
+      merchant: merchant,
+      amount: amount,
+      approved: reason.isEmpty,
+      declineReason: reason,
+      createdAt: _now(),
+    );
+    (u.cardPayments[id] ??= []).add(p);
+    u.cardPaymentKeys['$id $key'] = p;
+    if (reason.isEmpty) {
+      u.balance -= amount;
+      u.lines.add(
+        StatementLine(
+          kind: 'card_payment',
+          description: 'Card payment · $merchant',
+          ref: p.id,
+          amount: -amount,
+          at: _now(),
+        ),
+      );
+      _notify(u, 'card', '${formatNaira(amount)} paid with your card', 'At $merchant.', p.id);
+      _afterSpend(u, p.id, amount);
+    } else {
+      _notify(
+        u,
+        'card',
+        'Card payment of ${formatNaira(amount)} declined',
+        'At $merchant. ${switch (reason) {
+          'card frozen' => 'Your card is frozen. Unfreeze it in Cards if this was you.',
+          'over monthly limit' => 'It would take the card over its monthly limit. You can raise the limit in Cards.',
+          _ => 'Your balance was too low. Add money and try again.',
+        }}',
+        p.id,
+      );
+    }
+    return p;
   }
 
   /// Tells the customer once a month when a budget reaches 80%, then 100%.
@@ -1042,6 +1241,10 @@ class _DemoUser {
   final potsByKey = <String, String>{};
   final potMoves = <String>{};
   final budgets = <String, int>{};
+  final cards = <String, VirtualCard>{};
+  final cardPayments = <String, List<CardPayment>>{};
+  final cardPaymentKeys = <String, CardPayment>{};
+  var roundUp = const RoundUp(potId: '', step: 10000);
   final budgetAlerts = <String>{}; // "2026-10 data 80"
 }
 

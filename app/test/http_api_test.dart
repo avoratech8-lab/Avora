@@ -324,4 +324,56 @@ void main() {
     expect('${requests.last.method} ${requests.last.url.path}', 'PUT /v1/me/budgets/data');
     expect(jsonDecode(requests.last.body), {'amount': 50});
   });
+
+  test('cards and round-ups', () async {
+    await creds.setToken('tok');
+    final card = {
+      'id': 'c1',
+      'name': 'Netflix',
+      'brand': 'Verve',
+      'last4': '1234',
+      'expiry': '10/29',
+      'status': 'frozen',
+      'monthly_limit': 500000,
+      'spent_this_month': 440000,
+    };
+    final api = apiWith(
+      (r) => switch (r.url.path) {
+        '/v1/cards' => json({
+          'cards': [card],
+          'max': 3,
+          'sandbox': true,
+        }),
+        '/v1/cards/c1/details' => json({
+          'number': '5061990000001234',
+          'expiry': '10/29',
+          'cvv': '123',
+          'name_on_card': 'ADA OBI',
+        }),
+        '/v1/cards/c1/payments' => json({'payments': []}),
+        '/v1/sandbox/cards/c1/charge' => json({
+          'id': 'p1',
+          'card_id': 'c1',
+          'merchant': 'Bolt',
+          'amount': 100,
+          'status': 'declined',
+          'decline_reason': 'card frozen',
+          'created_at': '2026-10-23T12:00:00Z',
+        }),
+        '/v1/me/roundup' => json({'pot_id': 'pot', 'step': 10000}),
+        _ => json(card),
+      },
+    );
+    final list = await api.cards();
+    expect((list.cards.single.frozen, list.max, list.sandbox), (true, 3, true));
+    expect((await api.cardDetails('c1', '135790')).grouped, '5061 9900 0000 1234');
+    expect(jsonDecode(requests.last.body), {'pin': '135790'});
+    await api.freezeCard('c1', false);
+    expect(jsonDecode(requests.last.body), {'frozen': false});
+    final p = await api.testCardPayment('c1', merchant: 'Bolt', amount: 100, key: 'k');
+    expect((p.approved, requests.last.headers['Idempotency-Key']), (false, 'k'));
+    final r = await api.setRoundUp(potId: 'pot', step: 10000);
+    expect((r.on, r.extraFor(245000)), (true, 5000));
+    expect('${requests.last.method} ${requests.last.url.path}', 'PUT /v1/me/roundup');
+  });
 }
