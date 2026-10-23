@@ -19,6 +19,7 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/cards"
 	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
@@ -96,6 +97,8 @@ func run(log *slog.Logger) error {
 		Support:       support.NewService(pool),
 		P2P:           p2p.NewService(pool),
 		Insights:      insights.NewService(pool),
+		Cards:         cards.NewService(pool, sys, []byte(authSecret)),
+		Sandbox:       os.Getenv("SANDBOX") != "off",
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,

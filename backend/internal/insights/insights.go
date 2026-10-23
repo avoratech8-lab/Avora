@@ -27,11 +27,11 @@ const All = "all"
 
 // Categories are the spending categories, in display order.
 var Categories = []string{
-	"transfers", "avora", "airtime", "data", "electricity", "tv", "internet", "education", "betting", "other",
+	"transfers", "avora", "cards", "airtime", "data", "electricity", "tv", "internet", "education", "betting", "other",
 }
 
 var labels = map[string]string{
-	All: "monthly", "transfers": "bank transfers", "avora": "Avora transfers", "airtime": "airtime", "data": "data",
+	All: "monthly", "transfers": "bank transfers", "avora": "Avora transfers", "cards": "card", "airtime": "airtime", "data": "data",
 	"electricity": "electricity", "tv": "TV", "internet": "internet", "education": "exam PINs",
 	"betting": "betting", "other": "other",
 }
@@ -112,6 +112,8 @@ func bucket(j journal) string {
 		return "transfers"
 	case "bill_payment", "bill_refund":
 		return j.category
+	case "card_payment":
+		return "cards"
 	case "p2p":
 		if j.net < 0 {
 			return "avora"
