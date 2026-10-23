@@ -29,7 +29,7 @@ type ProviderRequest struct {
 
 type PayResult struct {
 	Status    ProviderStatus
-	Token     string // electricity token
+	Token     string // electricity token or exam PIN
 	Reference string // provider's reference
 	Reason    string
 }
@@ -64,20 +64,24 @@ func (Sandbox) Pay(_ context.Context, req ProviderRequest) (PayResult, error) {
 		return PayResult{Status: ProviderFailed, Reference: ref, Reason: "biller declined"}, nil
 	}
 	res := PayResult{Status: ProviderSuccess, Reference: ref}
-	if req.Biller.Category == Electricity {
-		res.Token = token()
+	switch req.Biller.Category {
+	case Electricity:
+		res.Token = digits(20)
+	case Education:
+		res.Token = digits(12)
 	}
 	return res, nil
 }
 
-func token() string {
+// digits returns n random digits in groups of four.
+func digits(n int) string {
 	var b strings.Builder
-	for i := range 20 {
+	for i := range n {
 		if i > 0 && i%4 == 0 {
 			b.WriteByte('-')
 		}
-		n, _ := rand.Int(rand.Reader, big.NewInt(10))
-		fmt.Fprint(&b, n)
+		d, _ := rand.Int(rand.Reader, big.NewInt(10))
+		fmt.Fprint(&b, d)
 	}
 	return b.String()
 }

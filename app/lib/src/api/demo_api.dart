@@ -196,6 +196,7 @@ class DemoAvoraApi implements AvoraApi {
     );
     u.transfers[id] = t;
     u.byKey[idempotencyKey] = id;
+    _budgetAlerts(u);
     return transfer(id);
   }
 
@@ -271,8 +272,10 @@ class DemoAvoraApi implements AvoraApi {
   Future<String> validateBillCustomer({required String billerId, required String customer}) async {
     _me;
     final b = _biller(billerId);
-    final digits = RegExp(r'^\d{10,13}$').hasMatch(customer);
-    if (!digits || (b.needsLookup && customer.endsWith('8'))) {
+    final ok = b.category == BillCategory.betting
+        ? RegExp(r'^[A-Za-z0-9]{4,20}$').hasMatch(customer)
+        : RegExp(r'^\d{10,13}$').hasMatch(customer);
+    if (!ok || (b.needsLookup && customer.endsWith('8'))) {
       throw ApiException('customer_not_found', 'We could not find that ${b.customerLabel.toLowerCase()}.', status: 404);
     }
     return b.needsLookup ? 'DEMO CUSTOMER ${customer.substring(customer.length - 4)}' : '';
@@ -312,6 +315,7 @@ class DemoAvoraApi implements AvoraApi {
     final id = randomId();
     final failed = customer.endsWith('0');
     final what = billDescription(b, plan?.name ?? '', customer);
+    final cashback = failed ? 0 : b.cashback(amount);
     final pay = BillPayment(
       id: id,
       billerId: b.id,
@@ -321,14 +325,27 @@ class DemoAvoraApi implements AvoraApi {
       customer: customer,
       customerName: name,
       amount: amount,
+      cashback: cashback,
       status: failed ? BillStatus.refunded : BillStatus.success,
-      token: !failed && b.category == BillCategory.electricity ? _token() : '',
+      token: failed
+          ? ''
+          : switch (b.category) {
+              BillCategory.electricity => _token(),
+              BillCategory.education => _token(12),
+              _ => '',
+            },
       reference: 'DEMOBILL${id.substring(0, 10).toUpperCase()}',
       failureReason: failed ? 'biller declined' : '',
       createdAt: _now(),
     );
     u.balance -= amount;
     u.lines.add(StatementLine(kind: 'bill_payment', description: what, ref: id, amount: -amount, at: pay.createdAt));
+    if (cashback > 0) {
+      u.balance += cashback;
+      u.lines.add(
+        StatementLine(kind: 'cashback', description: 'Cashback: $what', ref: id, amount: cashback, at: _now()),
+      );
+    }
     if (failed) {
       _notify(
         u,
@@ -344,12 +361,13 @@ class DemoAvoraApi implements AvoraApi {
     }
     u.bills[id] = pay;
     u.billsByKey[idempotencyKey] = id;
+    _budgetAlerts(u);
     return pay;
   }
 
-  String _token() {
-    final digits = randomId().codeUnits.map((c) => c % 10).take(20).join();
-    return [for (var i = 0; i < 20; i += 4) digits.substring(i, i + 4)].join('-');
+  String _token([int n = 20]) {
+    final digits = randomId().codeUnits.map((c) => c % 10).take(n).join();
+    return [for (var i = 0; i < n; i += 4) digits.substring(i, i + 4)].join('-');
   }
 
   @override
@@ -789,7 +807,117 @@ class DemoAvoraApi implements AvoraApi {
     other.p2p[id] = P2PTransfer(id: id, outgoing: false, amount: amount, note: n, other: _person(u), createdAt: at);
     u.p2pByKey[idempotencyKey] = id;
     _notify(other, 'money_in', '${formatNaira(amount)} received', 'From ${_who(u)}${n.isEmpty ? '' : ': $n'}', id);
+    _budgetAlerts(u);
     return u.p2p[id]!;
+  }
+
+  static const _budgetLabels = {
+    allSpending: 'monthly',
+    'transfers': 'bank transfers',
+    'avora': 'Avora transfers',
+    'airtime': 'airtime',
+    'data': 'data',
+    'electricity': 'electricity',
+    'tv': 'TV',
+    'internet': 'internet',
+    'education': 'exam PINs',
+    'betting': 'betting',
+    'other': 'other',
+  };
+
+  /// The spending category a statement line counts toward, or null if it
+  /// isn't spending. Refunds count against the payment they reverse.
+  String? _bucket(_DemoUser u, StatementLine l) => switch (l.kind) {
+    'transfer_hold' || 'transfer_refund' => 'transfers',
+    'bill_payment' || 'bill_refund' => u.bills[l.ref]?.category.name,
+    'p2p_out' => 'avora',
+    'p2p_in' || 'savings_deposit' || 'savings_withdraw' || 'cashback' => null,
+    _ => l.amount < 0 ? 'other' : null,
+  };
+
+  Insights _insights(_DemoUser u, DateTime month) {
+    final start = DateTime(month.year, month.month);
+    final end = DateTime(month.year, month.month + 1);
+    final prevStart = DateTime(month.year, month.month - 1);
+    final days = List.filled(end.subtract(const Duration(days: 1)).day, 0);
+    final spent = <String, int>{};
+    final counts = <String, int>{};
+    var moneyIn = 0, saved = 0, cashback = 0, previous = 0;
+    for (final l in u.lines) {
+      final b = _bucket(u, l);
+      if (!l.at.isBefore(prevStart) && l.at.isBefore(start)) {
+        if (b != null) previous -= l.amount;
+        continue;
+      }
+      if (l.at.isBefore(start) || !l.at.isBefore(end)) continue;
+      if (b != null) {
+        spent[b] = (spent[b] ?? 0) - l.amount;
+        if (!l.kind.endsWith('_refund')) counts[b] = (counts[b] ?? 0) + 1;
+        days[l.at.day - 1] -= l.amount;
+      } else if (l.kind.startsWith('savings_')) {
+        saved -= l.amount;
+      } else if (l.amount > 0) {
+        moneyIn += l.amount;
+        if (l.kind == 'cashback') cashback += l.amount;
+      }
+    }
+    final cats = [
+      for (final c in spendCategories)
+        if (spent.containsKey(c) || u.budgets.containsKey(c))
+          SpendCategory(category: c, amount: max(spent[c] ?? 0, 0), count: counts[c] ?? 0, budget: u.budgets[c] ?? 0),
+    ]..sort((a, b) => b.amount - a.amount);
+    return Insights(
+      month: start,
+      moneyIn: moneyIn,
+      moneyOut: cats.fold(0, (a, c) => a + c.amount),
+      saved: saved,
+      cashback: cashback,
+      previousOut: max(previous, 0),
+      budget: u.budgets[allSpending] ?? 0,
+      categories: cats,
+      days: [for (final d in days) max(d, 0)],
+    );
+  }
+
+  /// Tells the customer once a month when a budget reaches 80%, then 100%.
+  void _budgetAlerts(_DemoUser u) {
+    final m = _insights(u, _now());
+    final month = '${m.month.year}-${m.month.month}';
+    for (final (c, spent, budget) in [
+      (allSpending, m.moneyOut, m.budget),
+      for (final c in m.categories) (c.category, c.amount, c.budget),
+    ]) {
+      if (budget == 0 || spent * 100 < budget * 80) continue;
+      final full = spent >= budget;
+      if (!u.budgetAlerts.add('$month $c ${full ? 100 : 80}')) continue;
+      _notify(
+        u,
+        'budget',
+        full ? "You've reached your ${_budgetLabels[c]} budget" : '80% of your ${_budgetLabels[c]} budget used',
+        "You've spent ${formatNaira(spent)} of ${formatNaira(budget)} this month.",
+      );
+    }
+  }
+
+  @override
+  Future<Insights> insights({DateTime? month}) async => _insights(_me, month ?? _now());
+
+  @override
+  Future<Map<String, int>> budgets() async => Map.of(_me.budgets);
+
+  @override
+  Future<Map<String, int>> setBudget(String category, int amount) async {
+    final u = _me;
+    if (category != allSpending && !spendCategories.contains(category)) {
+      throw ApiException('invalid_request', 'Unknown category.', status: 400);
+    }
+    if (amount < 0) throw ApiException('invalid_request', 'A budget cannot be negative.', status: 400);
+    if (amount == 0) {
+      u.budgets.remove(category);
+    } else {
+      u.budgets[category] = amount;
+    }
+    return budgets();
   }
 
   @override
@@ -913,6 +1041,8 @@ class _DemoUser {
   final pots = <String, SavingsPot>{};
   final potsByKey = <String, String>{};
   final potMoves = <String>{};
+  final budgets = <String, int>{};
+  final budgetAlerts = <String>{}; // "2026-10 data 80"
 }
 
 /// How a bill payment reads on the statement; the backend uses the same words.
@@ -920,5 +1050,7 @@ String billDescription(Biller b, String plan, String customer) => switch (b.cate
   BillCategory.airtime => '${b.name} airtime · $customer',
   BillCategory.data => '${b.name} data $plan · $customer',
   BillCategory.electricity => '${b.name} · meter $customer',
-  BillCategory.tv => '${b.name} $plan · $customer',
+  BillCategory.tv || BillCategory.internet => '${b.name} $plan · $customer',
+  BillCategory.education => '${b.name} $plan',
+  BillCategory.betting => '${b.name} top-up · $customer',
 };

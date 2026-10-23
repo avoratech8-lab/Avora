@@ -65,10 +65,10 @@ func TestAirtimeSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Status != Success || p.Reference == "" || p.Amount != 500_00 {
+	if p.Status != Success || p.Reference == "" || p.Amount != 500_00 || p.Cashback != 10_00 {
 		t.Fatalf("got %+v", p)
 	}
-	if got := e.balance(t, e.wallet); got != 9_500_00 {
+	if got := e.balance(t, e.wallet); got != 9_510_00 {
 		t.Fatalf("wallet = %d", got)
 	}
 	if got := e.balance(t, e.sys.InFlight); got != 0 {
@@ -78,8 +78,12 @@ func TestAirtimeSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lines[0].Kind != "bill_payment" || lines[0].Description != "MTN airtime · 08031234567" || lines[0].Ref != p.ID {
-		t.Fatalf("statement line = %+v", lines[0])
+	if lines[0].Kind != "cashback" || lines[0].Description != "Cashback: MTN airtime · 08031234567" ||
+		lines[0].Amount != 10_00 || lines[0].Ref != p.ID {
+		t.Fatalf("cashback line = %+v", lines[0])
+	}
+	if lines[1].Kind != "bill_payment" || lines[1].Description != "MTN airtime · 08031234567" || lines[1].Ref != p.ID {
+		t.Fatalf("statement line = %+v", lines[1])
 	}
 	e.check(t)
 }
@@ -116,7 +120,7 @@ func TestDeclineRefundsInFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Status != Refunded || p.FailureReason == "" {
+	if p.Status != Refunded || p.FailureReason == "" || p.Cashback != 0 {
 		t.Fatalf("got %+v", p)
 	}
 	if got := e.balance(t, e.wallet); got != 10_000_00 {
@@ -148,12 +152,90 @@ func TestSameKeyPaysOnce(t *testing.T) {
 			t.Fatalf("ids differ: %v", ids)
 		}
 	}
-	if got := e.balance(t, e.wallet); got != 9_000_00 {
+	if got := e.balance(t, e.wallet); got != 9_020_00 { // one payment, one cashback
 		t.Fatalf("wallet = %d", got)
 	}
 	req.Amount = 2_000_00
 	if _, err := e.svc.Pay(e.ctx, req); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("err = %v", err)
+	}
+	e.check(t)
+}
+
+func TestCashbackIsCappedAndOnlyOnAirtimeAndData(t *testing.T) {
+	e := setup(t, Sandbox{}, 100_000_00)
+	pay := func(key, biller, plan, customer string, amount int64) Payment {
+		t.Helper()
+		p, err := e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: key, WalletAccountID: e.wallet,
+			BillerID: biller, PlanCode: plan, Customer: customer, Amount: amount})
+		if err != nil || p.Status != Success {
+			t.Fatalf("%s: %+v, %v", key, p, err)
+		}
+		return p
+	}
+	if p := pay("data", "mtn-data", "mtn-25gb-30d", "08031234567", 0); p.Cashback != 270_00 { // 3% of ₦9,000
+		t.Fatalf("data cashback = %d", p.Cashback)
+	}
+	if p := pay("big", "glo-airtime", "", "08051234567", 50_000_00); p.Cashback != MaxCashback {
+		t.Fatalf("capped cashback = %d", p.Cashback)
+	}
+	if p := pay("tv", "gotv", "gotv-max", "1234567891", 0); p.Cashback != 0 {
+		t.Fatalf("tv cashback = %d", p.Cashback)
+	}
+	want := int64(100_000_00 - 9_000_00 + 270_00 - 50_000_00 + MaxCashback - 8_500_00)
+	if got := e.balance(t, e.wallet); got != want {
+		t.Fatalf("wallet = %d, want %d", got, want)
+	}
+	e.check(t)
+}
+
+func TestInternetAndExamPins(t *testing.T) {
+	e := setup(t, Sandbox{}, 50_000_00)
+	p, err := e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: "smile", WalletAccountID: e.wallet,
+		BillerID: "smile", PlanCode: "smile-20gb", Customer: "1402345671"})
+	if err != nil || p.Status != Success || p.CustomerName != "SANDBOX CUSTOMER 5671" || p.Category != Internet {
+		t.Fatalf("smile = %+v, %v", p, err)
+	}
+	p, err = e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: "waec", WalletAccountID: e.wallet,
+		BillerID: "waec", PlanCode: "waec-result", Customer: "08031234567"})
+	if err != nil || p.Status != Success || len(p.Token) != 14 || p.CustomerName != "" {
+		t.Fatalf("waec = %+v, %v", p, err)
+	}
+	p, err = e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: "jamb2", WalletAccountID: e.wallet,
+		BillerID: "jamb", PlanCode: "jamb-utme", Customer: "1234567891"})
+	if err != nil || p.Token == "" || p.CustomerName == "" {
+		t.Fatalf("jamb = %+v, %v", p, err)
+	}
+	if got := e.balance(t, e.wallet); got != 50_000_00-8_000_00-3_900_00-7_700_00 {
+		t.Fatalf("wallet = %d", got)
+	}
+	e.check(t)
+}
+
+func TestBettingTopUpAndSwitchingItOff(t *testing.T) {
+	e := setup(t, Sandbox{}, 10_000_00)
+	p, err := e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: "bet", WalletAccountID: e.wallet,
+		BillerID: "bet9ja", Customer: "BN48213", Amount: 2_000_00})
+	if err != nil || p.Status != Success || p.CustomerName != "SANDBOX CUSTOMER 8213" || p.Cashback != 0 {
+		t.Fatalf("bet9ja = %+v, %v", p, err)
+	}
+	if _, err := e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: "short", WalletAccountID: e.wallet,
+		BillerID: "sportybet", Customer: "ab!", Amount: 1_000_00}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad user id: err = %v", err)
+	}
+
+	e.svc.Disable(Betting)
+	for _, b := range e.svc.Billers() {
+		if b.Category == Betting {
+			t.Fatalf("%s still listed", b.ID)
+		}
+	}
+	if _, err := e.svc.Pay(e.ctx, PayRequest{IdempotencyKey: "off", WalletAccountID: e.wallet,
+		BillerID: "bet9ja", Customer: "BN48213", Amount: 1_000_00}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("disabled: err = %v", err)
+	}
+	if got := e.balance(t, e.wallet); got != 8_000_00 {
+		t.Fatalf("wallet = %d", got)
 	}
 	e.check(t)
 }

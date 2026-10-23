@@ -5,6 +5,7 @@ import '../app.dart';
 import '../dates.dart';
 import '../ui/theme.dart';
 import 'bill_receipt_screen.dart';
+import 'insights_screen.dart';
 import 'transfer_screen.dart';
 
 /// The bell: money in, transfers, refunds, security and account news.
@@ -43,6 +44,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     'transfer' => (Icons.north_east_rounded, const Color(0xFF2563EB)),
     'bill' => (Icons.replay_rounded, Brand.warning),
     'security' => (Icons.shield_outlined, Brand.danger),
+    'budget' => (Icons.flag_outlined, Brand.warning),
     _ => (Icons.campaign_outlined, Brand.deepGreen),
   };
 
@@ -50,9 +52,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final Widget? page = switch (n.kind) {
       'transfer' => TransferScreen(transferId: n.ref),
       'bill' => BillReceiptScreen(paymentId: n.ref),
+      'budget' => const InsightsScreen(),
       _ => null,
     };
-    if (n.ref.isEmpty || page == null) return null;
+    if (page == null || (n.ref.isEmpty && n.kind != 'budget')) return null;
     return () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
 

@@ -5,6 +5,7 @@ import '../api/api.dart';
 import '../api/models.dart';
 import '../app.dart';
 import '../money.dart';
+import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'bill_receipt_screen.dart';
 import 'send_screen.dart';
@@ -14,10 +15,13 @@ String categoryTitle(BillCategory c) => switch (c) {
   BillCategory.data => 'Buy data',
   BillCategory.electricity => 'Pay electricity',
   BillCategory.tv => 'Pay for TV',
+  BillCategory.internet => 'Pay for internet',
+  BillCategory.education => 'Exam PINs',
+  BillCategory.betting => 'Fund betting wallet',
 };
 
-/// Airtime, data, electricity and TV: pick the provider, enter the phone,
-/// meter or smartcard, choose a plan or amount, confirm with the PIN.
+/// Any bill: pick the provider, enter the phone, meter, smartcard or user
+/// ID, choose a plan or amount, confirm with the PIN.
 class BillerScreen extends StatefulWidget {
   const BillerScreen({super.key, required this.category});
 
@@ -40,7 +44,8 @@ class _BillerScreenState extends State<BillerScreen> {
   int _lookup = 0;
 
   BillCategory get _cat => widget.category;
-  bool get _isPhone => _cat == BillCategory.airtime || _cat == BillCategory.data;
+  bool get _isPhone => _biller?.byPhone ?? (_cat == BillCategory.airtime || _cat == BillCategory.data);
+  bool get _isBetting => _cat == BillCategory.betting;
 
   @override
   void didChangeDependencies() {
@@ -86,7 +91,7 @@ class _BillerScreenState extends State<BillerScreen> {
     });
     final b = _biller;
     final c = _customer.text.trim();
-    if (b == null || !b.needsLookup || c.length < 10) return;
+    if (b == null || !b.needsLookup || c.length < (_isBetting ? 4 : 10)) return;
     setState(() => _looking = true);
     AppScope.of(context).api
         .validateBillCustomer(billerId: b.id, customer: c)
@@ -127,6 +132,7 @@ class _BillerScreenState extends State<BillerScreen> {
   Future<void> _continue() async {
     final b = _biller!;
     final amount = _chosenAmount!;
+    final cashback = b.cashback(amount);
     final customer = _customer.text.trim();
     final api = AppScope.of(context).api;
     final payment = await showModalBottomSheet<BillPayment>(
@@ -142,9 +148,12 @@ class _BillerScreenState extends State<BillerScreen> {
           (b.customerLabel, customer),
           if (_customerName != null && _customerName!.isNotEmpty) ('Name', _customerName!),
           ('Fee', 'Free'),
+          if (cashback > 0) ('Cashback', '+${formatNaira(cashback)}'),
           ('Total', formatNaira(amount)),
         ],
-        footnote: 'If it fails, the money comes straight back to your wallet.',
+        footnote: _isBetting
+            ? 'For 18+ only. Please play responsibly. If it fails, the money comes straight back.'
+            : 'If it fails, the money comes straight back to your wallet.',
         action: (pin, key) => api.payBill(
           billerId: b.id,
           planCode: _plan?.code,
@@ -199,16 +208,22 @@ class _BillerScreenState extends State<BillerScreen> {
                         Text('Provider', style: theme.textTheme.labelMedium),
                         const SizedBox(height: 10),
                         _ProviderGrid(billers: billers, selected: b, onPick: _pickBiller),
+                        if (b != null && b.cashbackBps > 0) _Note.cashback(b),
+                        if (_isBetting) const _Note.adults(),
                         const SizedBox(height: 20),
                         Text(b?.customerLabel ?? 'Number', style: theme.textTheme.labelMedium),
                         const SizedBox(height: 8),
                         TextField(
                           key: const Key('bill-customer'),
                           controller: _customer,
-                          keyboardType: TextInputType.number,
+                          keyboardType: _isBetting ? TextInputType.text : TextInputType.number,
+                          autocorrect: false,
                           inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
-                            LengthLimitingTextInputFormatter(13),
+                            if (_isBetting)
+                              FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9]'))
+                            else
+                              FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(_isBetting ? 20 : 13),
                           ],
                           style: theme.textTheme.titleMedium?.copyWith(letterSpacing: 1.2),
                           decoration: InputDecoration(
@@ -216,7 +231,13 @@ class _BillerScreenState extends State<BillerScreen> {
                                 ? '0803 123 4567'
                                 : 'Enter ${b?.customerLabel.toLowerCase() ?? 'number'}',
                             errorText: _customerError,
-                            prefixIcon: Icon(_isPhone ? Icons.phone_android_rounded : Icons.numbers_rounded),
+                            prefixIcon: Icon(
+                              _isPhone
+                                  ? Icons.phone_android_rounded
+                                  : _isBetting
+                                  ? Icons.person_outline_rounded
+                                  : Icons.numbers_rounded,
+                            ),
                             suffixIcon: _looking
                                 ? const Padding(
                                     padding: EdgeInsets.all(16),
@@ -246,7 +267,12 @@ class _BillerScreenState extends State<BillerScreen> {
                           ),
                         const SizedBox(height: 20),
                         if (b != null && b.hasPlans) ...[
-                          Text(_cat == BillCategory.data ? 'Bundle' : 'Package', style: theme.textTheme.labelMedium),
+                          Text(switch (_cat) {
+                            BillCategory.data => 'Bundle',
+                            BillCategory.education => 'What you need',
+                            BillCategory.internet => 'Plan',
+                            _ => 'Package',
+                          }, style: theme.textTheme.labelMedium),
                           const SizedBox(height: 10),
                           _PlanGrid(plans: b.plans, selected: _plan, onPick: (p) => setState(() => _plan = p)),
                         ] else ...[
@@ -265,10 +291,11 @@ class _BillerScreenState extends State<BillerScreen> {
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              for (final n
-                                  in _cat == BillCategory.airtime
-                                      ? [100, 200, 500, 1000, 2000]
-                                      : [2000, 5000, 10000, 20000])
+                              for (final n in switch (_cat) {
+                                BillCategory.airtime => [100, 200, 500, 1000, 2000],
+                                BillCategory.betting => [500, 1000, 2000, 5000],
+                                _ => [2000, 5000, 10000, 20000],
+                              })
                                 ActionChip(
                                   label: Text(formatNaira(n * 100).replaceAll('.00', '')),
                                   onPressed: () => setState(() => _amount.text = '$n'),
@@ -289,6 +316,45 @@ class _BillerScreenState extends State<BillerScreen> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+/// A line under the providers: cashback on offer, or the age limit.
+class _Note extends StatelessWidget {
+  _Note.cashback(Biller b)
+    : icon = Icons.savings_rounded,
+      text =
+          'Get ${b.cashbackRate} back on every ${b.category == BillCategory.data ? 'bundle' : 'top-up'}, '
+          'up to ${formatNaira(Biller.maxCashback).replaceAll('.00', '')}.',
+      noteKey = const Key('cashback-note');
+
+  const _Note.adults()
+    : icon = Icons.eighteen_up_rating_rounded,
+      text = 'For 18+ only. Bet with money you can afford to lose.',
+      noteKey = const Key('adults-note');
+
+  final IconData icon;
+  final String text;
+  final Key noteKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      key: noteKey,
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(color: Brand.lime.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(14)),
+      child: Row(
+        children: [
+          Icon(icon, color: Brand.deepGreen, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: Brand.deepGreen)),
+          ),
+        ],
       ),
     );
   }

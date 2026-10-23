@@ -14,10 +14,11 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
   - A transfer is sent once and never resent. If the bank doesn't answer, it is requeried on a backoff (1, 2, 5, 10, 30 then 60 minutes).
   - A decline is refunded in full, including the fee.
   - A transfer with no answer after 6 hours goes to `needs_review` for the ops team.
-- **Bills.** Airtime, data, electricity and TV through `GET /v1/bills/billers`, `POST /v1/bills/validate` and `POST /v1/bills/payments` (PIN and `Idempotency-Key` required). The money is held, then settled, or refunded in full if the biller declines. Bills count toward the new-phone limit.
+- **Bills.** Airtime, data, electricity, TV, internet (Spectranet, Smile), exam PINs (WAEC, NECO, JAMB) and betting wallet top-ups (Bet9ja, SportyBet, BetKing, 1xBet, NairaBet, MSport) through `GET /v1/bills/billers`, `POST /v1/bills/validate` and `POST /v1/bills/payments` (PIN and `Idempotency-Key` required). The money is held, then settled, or refunded in full if the biller declines. Bills count toward the new-phone limit. Airtime earns 2% and data 3% cashback (at most ₦500 a payment), paid from `system:cashback` once the biller confirms; the rates are placeholders to set within the aggregator's commission. Betting is on by default; set `BETTING=off` to hide it.
 - **Savings.** Non-interest (mudarabah) pots, each its own ledger account: `GET/POST /v1/savings`, `POST /v1/savings/{id}/deposit` and `/withdraw`. Profit is shared after each month at the rate the partner bank declares: `POST /v1/ops/savings/profit` with `{"period": "2026-10", "goal_rate_bps": 800, "locked_rate_bps": 1200}` (each month once). Expected rates (8% goals; 10 to 16% locked) are placeholders until the bank publishes its profit-sharing ratios.
 - **KYC tiers and limits.** Phone-only accounts are Tier 1 (₦50,000 a day, ₦300,000 balance). A verified BVN or NIN gives Tier 2 (₦200,000 a day, ₦500,000 balance), and both give Tier 3 (₦5,000,000 a day, no balance cap). Transfers and bills since midnight Lagos time count toward the daily limit. `GET/POST /v1/me/kyc`; only the last 4 digits of an ID are kept. The tier amounts follow the published CBN tiers and must be confirmed with the partner bank. Sandbox: any 11-digit number is accepted except ones ending in 0.
 - **Avora tags and free instant transfers.** Each customer can claim a tag like `@ada` (3 to 20 letters, numbers or `_`, starting with a letter; names like `@avora` and `@support` are reserved). Sending to another Avora customer by tag or phone number is one ledger journal between two wallets: free, instant, and it can't get stuck at another bank. The PIN and an `Idempotency-Key` are required, the payment counts toward the daily limit, and the person paid gets a notification. Phone numbers are masked in lookups.
+- **Spending insights and budgets.** `GET /v1/me/insights?month=2026-10` totals a month (Lagos time) from the ledger: money in, spending by category net of refunds, money saved, cashback, daily spending and last month's total. Budgets per category or for all spending (`GET /v1/me/budgets`, `PUT /v1/me/budgets/{category}` with `{"amount"}`, 0 removes) send a notification at 80% and at 100%, once each a month.
 - **Security settings.** Change PIN (`POST /v1/me/pin`, which signs out other phones), check the PIN to unlock the app (`POST /v1/me/pin/verify`), and list or remove phones (`GET /v1/me/devices`, `DELETE /v1/me/devices/{id}`). The app sends `X-Device-Name` at sign-in so phones have names.
 - **Notifications.** Money received, transfers delivered, refunded or under review, bill refunds, new phone sign-ins, PIN changes and tier upgrades: `GET /v1/me/notifications` and `POST /v1/me/notifications/read`.
 - **Referrals.** Each customer gets an invite code (`GET /v1/me/referrals`). A friend can add it within 30 days of joining (`POST /v1/me/referrals`). When that friend first reaches Tier 2, the inviter is paid ₦500 from `system:referral_rewards`, once per friend. The amount is a placeholder until marketing sets a budget.
@@ -62,9 +63,12 @@ The Flutter app covers:
 - **Home:** balance card (hideable), account number to copy or share, quick actions, "Send again" for saved recipients, and recent activity.
 - **Send to Avora:** type an @tag or phone number, see who it is, and send for free. It arrives instantly with a receipt on both sides. A card on Home asks you to claim your own tag.
 - **Send money:** searchable bank list, automatic name check, a big amount pad, a review screen showing the fee, and PIN approval.
+- **Cashback:** 2% back on airtime and 3% on data, shown before you pay and on the receipt.
+- **More bills:** internet, WAEC/NECO/JAMB PINs (the PIN is on the receipt to copy), and betting top-ups by user ID with an 18+ note.
 - **Airtime, data, electricity and TV:** all networks, the main DisCos (the meter name is checked and a token issued), and DStv, GOtv and StarTimes packages.
 - **Receipts:** live status for every payment and receipts you can share. They show the session ID for transfers and the token for electricity.
 - **Savings (interest-free):** Goal pots you can add to or take from at any time, and Locked plans (1, 3, 6 or 12 months) that earn a higher expected profit share. Breaking a plan early returns the money but gives back its profit share.
+- **Spending insights:** what you spent this month against last month, day-by-day bars, where it went by category, and monthly budgets (overall or per category) with alerts at 80% and 100%.
 - **Activity:** money in and out totals, search and filters, grouped by day.
 - **Security:** fingerprint or face unlock, an app lock (immediately, after 1 or after 5 minutes away) with PIN fallback, fingerprint or face approval for payments, change PIN, and phones signed in. With biometrics on, the PIN is kept in the phone's Keystore/Keychain and only released after a fingerprint or face check, so the server still checks the PIN on every payment.
 - **Limits:** your KYC tier and what it allows, and BVN or NIN verification to move up.
@@ -140,6 +144,9 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | GET | `/v1/p2p/find?q=` | Find an Avora customer by @tag or phone |
 | POST | `/v1/p2p` | `{"to", "amount", "note", "pin"}` + `Idempotency-Key`: free instant transfer |
 | GET | `/v1/p2p/{id}` | One Avora transfer |
+| GET | `/v1/me/insights?month=` | A month's money in and out by category |
+| GET | `/v1/me/budgets` | My monthly budgets |
+| PUT | `/v1/me/budgets/{category}` | `{"amount"}`: set a budget (0 removes) |
 | GET | `/v1/me/referrals` | My invite code and rewards |
 | POST | `/v1/me/referrals` | `{"code"}`: the code I was invited with |
 | GET | `/v1/help/articles` | Help centre articles |

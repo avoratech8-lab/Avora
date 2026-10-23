@@ -19,6 +19,7 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
@@ -79,17 +80,22 @@ func run(log *slog.Logger) error {
 	}
 	kycSvc := kyc.NewService(pool, kyc.Sandbox{})
 	kycSvc.OnVerified = refSvc.Verified
+	billSvc := bills.NewService(pool, bills.Sandbox{}, sys)
+	if os.Getenv("BETTING") == "off" {
+		billSvc.Disable(bills.Betting)
+	}
 	srv := &api.Server{
 		DB:            pool,
 		Rail:          rail,
 		System:        sys,
 		Transfers:     svc,
-		Bills:         bills.NewService(pool, bills.Sandbox{}, sys),
+		Bills:         billSvc,
 		Savings:       savingsSvc,
 		KYC:           kycSvc,
 		Referrals:     refSvc,
 		Support:       support.NewService(pool),
 		P2P:           p2p.NewService(pool),
+		Insights:      insights.NewService(pool),
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,

@@ -23,6 +23,14 @@ List<Biller> demoBillers() {
     'kedco': 'Kano Electric',
     'eedc': 'Enugu Electric',
   };
+  const books = {
+    'bet9ja': 'Bet9ja',
+    'sportybet': 'SportyBet',
+    'betking': 'BetKing',
+    '1xbet': '1xBet',
+    'nairabet': 'NairaBet',
+    'msport': 'MSport',
+  };
 
   return [
     for (final n in networks.entries)
@@ -34,6 +42,7 @@ List<Biller> demoBillers() {
         plans: const [],
         minAmount: 5000,
         maxAmount: 5000000,
+        cashbackBps: 200,
       ),
     for (final n in networks.entries)
       Biller(
@@ -44,6 +53,7 @@ List<Biller> demoBillers() {
         plans: data(n.key),
         minAmount: 0,
         maxAmount: 0,
+        cashbackBps: 300,
       ),
     for (final d in discos.entries)
       Biller(
@@ -98,5 +108,68 @@ List<Biller> demoBillers() {
       minAmount: 0,
       maxAmount: 0,
     ),
+    Biller(
+      id: 'spectranet',
+      name: 'Spectranet',
+      category: BillCategory.internet,
+      customerLabel: 'Customer ID',
+      plans: [
+        p('spectranet-30gb', '30GB · 30 days', 10000),
+        p('spectranet-65gb', '65GB · 30 days', 20000),
+        p('spectranet-unlimited', 'Unlimited · 30 days', 35000),
+      ],
+      minAmount: 0,
+      maxAmount: 0,
+    ),
+    Biller(
+      id: 'smile',
+      name: 'Smile',
+      category: BillCategory.internet,
+      customerLabel: 'Account number',
+      plans: [
+        p('smile-6gb', '6GB · 30 days', 3000),
+        p('smile-20gb', '20GB · 30 days', 8000),
+        p('smile-unlimited', 'Unlimited Lite · 30 days', 20000),
+      ],
+      minAmount: 0,
+      maxAmount: 0,
+    ),
+    Biller(
+      id: 'waec',
+      name: 'WAEC',
+      category: BillCategory.education,
+      customerLabel: 'Phone number',
+      plans: [p('waec-result', 'Result checker PIN', 3900)],
+      minAmount: 0,
+      maxAmount: 0,
+    ),
+    Biller(
+      id: 'neco',
+      name: 'NECO',
+      category: BillCategory.education,
+      customerLabel: 'Phone number',
+      plans: [p('neco-result', 'Result token', 1300)],
+      minAmount: 0,
+      maxAmount: 0,
+    ),
+    Biller(
+      id: 'jamb',
+      name: 'JAMB',
+      category: BillCategory.education,
+      customerLabel: 'Profile code',
+      plans: [p('jamb-utme', 'UTME ePIN', 7700), p('jamb-de', 'Direct Entry ePIN', 7700)],
+      minAmount: 0,
+      maxAmount: 0,
+    ),
+    for (final b in books.entries)
+      Biller(
+        id: b.key,
+        name: b.value,
+        category: BillCategory.betting,
+        customerLabel: 'User ID',
+        plans: const [],
+        minAmount: 10000,
+        maxAmount: 50000000,
+      ),
   ];
 }

@@ -40,3 +40,22 @@ String formatDate(DateTime t) {
   final l = t.toLocal();
   return '${l.day} ${_months[l.month - 1]} ${l.year}';
 }
+
+/// "October 2026".
+String formatMonth(DateTime t) {
+  const names = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return '${names[t.month - 1]} ${t.year}';
+}

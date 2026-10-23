@@ -98,6 +98,15 @@ abstract class AvoraApi {
   });
   Future<P2PTransfer> p2pTransfer(String id);
 
+  /// Money in and out for the month holding [month] (this month if null).
+  Future<Insights> insights({DateTime? month});
+
+  /// Monthly budgets by category ([allSpending] for everything).
+  Future<Map<String, int>> budgets();
+
+  /// Sets a monthly budget; 0 removes it.
+  Future<Map<String, int>> setBudget(String category, int amount);
+
   Future<ReferralSummary> referrals();
 
   /// Records the invite code this customer joined with.

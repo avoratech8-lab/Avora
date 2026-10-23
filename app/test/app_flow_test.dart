@@ -158,17 +158,21 @@ void main() {
     await tester.tap(find.byKey(const Key('plan-airtel-2gb-7d')));
     await tester.pumpAndSettle();
     expect(find.text('Pay ₦1,500.00'), findsOneWidget);
+    expect(find.byKey(const Key('cashback-note')), findsOneWidget);
     await tester.tap(find.byKey(const Key('bill-continue')));
     await tester.pumpAndSettle();
+    expect(find.text('+₦45.00'), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm')));
     await tester.pumpAndSettle();
     await typeOnPad(tester, '135790');
     expect(find.text('Successful'), findsOneWidget);
     expect(find.text('Data sent to 08021234567.'), findsOneWidget);
+    expect(find.text('+₦45.00 to your wallet'), findsOneWidget);
 
+    // ₦1,500 for the bundle, ₦45 (3%) back.
     await tester.tap(find.byKey(const Key('done')));
     await tester.pumpAndSettle();
-    expect(find.text('₦48,500.00'), findsOneWidget);
+    expect(find.text('₦48,545.00'), findsOneWidget);
   });
 
   testWidgets('electricity shows the meter name and a token', (tester) async {
@@ -539,5 +543,100 @@ void main() {
     await tester.tap(find.text('To Tolu Adeyemi (@tolu)'));
     await tester.pumpAndSettle();
     expect(find.text('Sent'), findsOneWidget);
+  });
+
+  testWidgets('fund a betting wallet by user ID, and buy a WAEC PIN', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('action-betting')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('adults-note')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('biller-sportybet')));
+    await tester.enterText(find.byKey(const Key('bill-customer')), 'SB4821');
+    await tester.pumpAndSettle();
+    expect(find.text('DEMO CUSTOMER 4821'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('bill-amount')), '2000');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('bill-continue')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('18+'), findsWidgets);
+    await tester.tap(find.byKey(const Key('confirm')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    expect(find.text('Your SportyBet wallet has been funded.'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('done')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('action-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Exam PINs'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('biller-waec')));
+    await tester.enterText(find.byKey(const Key('bill-customer')), '08031234567');
+    await tester.tap(find.byKey(const Key('plan-waec-result')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('bill-continue')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    expect(find.text('Your Result checker PIN'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('done')));
+    await tester.pumpAndSettle();
+    expect(find.text('₦44,100.00'), findsOneWidget);
+  });
+
+  testWidgets('see where the money went and set a budget', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await api.payBill(
+      billerId: 'mtn-data',
+      planCode: 'mtn-10gb-30d',
+      customer: '08031234567',
+      amount: 0,
+      pin: '135790',
+      idempotencyKey: 'd',
+    );
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Activity'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: find.byKey(const Key('insights-card')), matching: find.text('₦4,500.00')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('insights-card')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('spent')), findsOneWidget);
+    expect(find.text('₦4,500.00'), findsWidgets);
+    expect(find.byKey(const Key('cat-data')), findsOneWidget);
+
+    // A ₦5,000 monthly budget leaves ₦500.
+    await tester.tap(find.byKey(const Key('budget-all')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('budget-amount')), '5000');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('budget-save')));
+    await tester.pumpAndSettle();
+    expect(find.text('₦500 left'), findsOneWidget);
+
+    // A data budget shows on its row.
+    await tester.tap(find.byKey(const Key('cat-data')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('budget-amount')), '4000');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('budget-save')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('budget ₦4,000'), findsOneWidget);
+    expect(await api.budgets(), {allSpending: 500000, 'data': 400000});
+
+    // Last month was empty.
+    await tester.tap(find.byKey(const Key('month-prev')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Nothing spent'), findsOneWidget);
   });
 }
