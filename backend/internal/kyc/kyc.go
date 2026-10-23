@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"avora/backend/internal/notify"
@@ -72,6 +73,10 @@ type Status struct {
 type Service struct {
 	db *pgxpool.Pool
 	v  Verifier
+
+	// OnVerified, if set, runs in the same transaction when a customer
+	// first reaches tier 2; referral rewards hang off it.
+	OnVerified func(ctx context.Context, tx pgx.Tx, userID int64) error
 }
 
 func NewService(db *pgxpool.Pool, v Verifier) *Service { return &Service{db: db, v: v} }
@@ -124,6 +129,11 @@ func (s *Service) Verify(ctx context.Context, userID, walletID int64, kind, numb
 		where id = $1 returning kyc_tier`, userID).Scan(&after)
 	if err != nil {
 		return Status{}, err
+	}
+	if before < 2 && after >= 2 && s.OnVerified != nil {
+		if err := s.OnVerified(ctx, tx, userID); err != nil {
+			return Status{}, err
+		}
 	}
 	if after > before {
 		l := LimitsFor(after)

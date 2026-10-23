@@ -33,7 +33,9 @@ import (
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/notify"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/support"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
 )
@@ -46,6 +48,8 @@ type Server struct {
 	Bills         *bills.Service
 	Savings       *savings.Service
 	KYC           *kyc.Service
+	Referrals     *referrals.Service
+	Support       *support.Service
 	Auth          *auth.Service
 	WebhookSecret string
 	OpsKey        string
@@ -78,6 +82,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/me/kyc", s.signedIn(s.verifyKYC))
 	mux.HandleFunc("GET /v1/me/notifications", s.signedIn(s.listNotifications))
 	mux.HandleFunc("POST /v1/me/notifications/read", s.signedIn(s.readNotifications))
+	mux.HandleFunc("GET /v1/me/referrals", s.signedIn(s.referralSummary))
+	mux.HandleFunc("POST /v1/me/referrals", s.signedIn(s.joinReferral))
+	mux.HandleFunc("GET /v1/help/articles", s.helpArticles)
+	mux.HandleFunc("GET /v1/support/messages", s.signedIn(s.supportMessages))
+	mux.HandleFunc("POST /v1/support/messages", s.signedIn(s.sendSupportMessage))
 	mux.HandleFunc("POST /v1/name-enquiry", s.signedIn(s.nameEnquiry))
 	mux.HandleFunc("POST /v1/transfers", s.signedIn(s.createTransfer))
 	mux.HandleFunc("GET /v1/transfers/quote", s.signedIn(s.quoteTransfer))
@@ -96,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/webhooks/inbound-credit", s.inboundCredit)
 	mux.HandleFunc("POST /v1/ops/transfers/{id}/resolve", s.opsOnly(s.resolveTransfer))
 	mux.HandleFunc("POST /v1/ops/savings/profit", s.opsOnly(s.shareProfit))
+	mux.HandleFunc("POST /v1/ops/support/{user_id}/reply", s.opsOnly(s.supportReply))
 	return mux
 }
 
@@ -395,6 +405,77 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": ns, "unread": unread})
 }
 
+func (s *Server) referralSummary(w http.ResponseWriter, r *http.Request) {
+	sum, err := s.Referrals.Summary(r.Context(), principal(r).UserID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+func (s *Server) joinReferral(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Code string `json:"code"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	sum, err := s.Referrals.Join(r.Context(), principal(r).UserID, body.Code)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+func (s *Server) helpArticles(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"articles": support.Articles})
+}
+
+func (s *Server) supportMessages(w http.ResponseWriter, r *http.Request) {
+	ms, err := s.Support.Messages(r.Context(), principal(r).UserID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": ms})
+}
+
+func (s *Server) sendSupportMessage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Body string `json:"body"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	ms, err := s.Support.Send(r.Context(), principal(r).UserID, body.Body)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": ms})
+}
+
+func (s *Server) supportReply(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(r.PathValue("user_id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "user_id must be a number.")
+		return
+	}
+	var body struct {
+		Body string `json:"body"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.Support.Reply(r.Context(), userID, body.Body); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) readNotifications(w http.ResponseWriter, r *http.Request) {
 	if err := notify.MarkAllRead(r.Context(), s.DB, principal(r).WalletID, s.Now()); err != nil {
 		s.fail(w, err)
@@ -655,6 +736,16 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "insufficient_funds", "Your balance is too low for this payment, including any fee.")
 	case errors.Is(err, kyc.ErrMismatch):
 		writeError(w, http.StatusUnprocessableEntity, "kyc_mismatch", "Those details don't match the records. Check the number and try again.")
+	case errors.Is(err, referrals.ErrUnknownCode):
+		writeError(w, http.StatusNotFound, "unknown_code", "We don't recognise that invite code. Check it and try again.")
+	case errors.Is(err, referrals.ErrOwnCode):
+		writeError(w, http.StatusBadRequest, "own_code", "That's your own invite code. Share it with friends instead.")
+	case errors.Is(err, referrals.ErrAlreadyUsed):
+		writeError(w, http.StatusConflict, "code_used", "You've already joined with an invite code.")
+	case errors.Is(err, referrals.ErrTooLate):
+		writeError(w, http.StatusConflict, "code_too_late", "Invite codes can only be added in your first 30 days.")
+	case errors.Is(err, referrals.ErrInvalid), errors.Is(err, support.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request", friendly(err))
 	case errors.Is(err, auth.ErrThisDevice):
 		writeError(w, http.StatusConflict, "this_device", "This is the phone you're using. Sign out instead.")
 	case errors.Is(err, auth.ErrNoSuchDevice):

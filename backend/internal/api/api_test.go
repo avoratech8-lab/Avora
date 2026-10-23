@@ -21,7 +21,9 @@ import (
 	"avora/backend/internal/bills"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/support"
 	"avora/backend/internal/testdb"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
@@ -71,10 +73,18 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ref, err := referrals.NewService(ctx, pool, referrals.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kyc.NewService(pool, kyc.Sandbox{})
+	k.OnVerified = ref.Verified
 	s := &api.Server{
-		Savings: sav,
-		KYC:     kyc.NewService(pool, kyc.Sandbox{}),
-		DB:      pool, Rail: rail, System: sys,
+		Savings:   sav,
+		KYC:       k,
+		Referrals: ref,
+		Support:   support.NewService(pool),
+		DB:        pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
 		Auth: auth.NewService(pool, sms, acfg, func(context.Context, string) (string, error) {
@@ -480,5 +490,91 @@ func TestOpsRoutesNeedKey(t *testing.T) {
 	}
 	if code, _ := c.call("POST", path, map[string]string{"outcome": "refunded"}, map[string]string{"X-Ops-Key": opsKey}); code != http.StatusNotFound {
 		t.Errorf("with key: %d", code)
+	}
+}
+
+func TestReferralPaysWhenTheFriendVerifies(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	_, sum := ada.call("GET", "/v1/me/referrals", nil, nil)
+	code, _ := sum["code"].(string)
+	if len(code) != 8 || !strings.HasPrefix(code, "AV") {
+		t.Fatalf("code = %q", code)
+	}
+	if _, again := ada.call("GET", "/v1/me/referrals", nil, nil); again["code"] != code {
+		t.Fatalf("code changed: %v", again["code"])
+	}
+	if c, e := ada.call("POST", "/v1/me/referrals", map[string]string{"code": code}, nil); c != http.StatusBadRequest {
+		t.Errorf("own code: %d %v", c, e)
+	}
+
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08021234567", "593816")
+	if c, _ := bola.call("POST", "/v1/me/referrals", map[string]string{"code": "AVNOPE22"}, nil); c != http.StatusNotFound {
+		t.Errorf("unknown code: %d", c)
+	}
+	if c, e := bola.call("POST", "/v1/me/referrals", map[string]string{"code": strings.ToLower(code)}, nil); c != http.StatusOK ||
+		e["joined_with"] != code || e["can_add_code"] != false {
+		t.Fatalf("join: %d %v", c, e)
+	}
+	if c, _ := bola.call("POST", "/v1/me/referrals", map[string]string{"code": code}, nil); c != http.StatusConflict {
+		t.Errorf("second join: %d", c)
+	}
+	if _, sum = ada.call("GET", "/v1/me/referrals", nil, nil); sum["invited"] != float64(1) || sum["earned"] != float64(0) {
+		t.Fatalf("before verify: %v", sum)
+	}
+
+	// Verifying twice (BVN then NIN) pays once.
+	bola.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "22212345678"}, nil)
+	bola.call("POST", "/v1/me/kyc", map[string]string{"type": "nin", "number": "12345678901"}, nil)
+	if _, sum = ada.call("GET", "/v1/me/referrals", nil, nil); sum["rewarded"] != float64(1) || sum["earned"] != float64(500_00) {
+		t.Fatalf("after verify: %v", sum)
+	}
+	if _, w := ada.call("GET", "/v1/me/wallet", nil, nil); w["balance"] != float64(500_00) {
+		t.Errorf("balance = %v", w["balance"])
+	}
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["title"] != "₦500.00 referral reward" {
+		t.Errorf("notification = %v", first)
+	}
+}
+
+func TestSupportChatBotAndAgent(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+
+	if c, a := ada.call("GET", "/v1/help/articles", nil, nil); c != http.StatusOK || len(a["articles"].([]any)) < 5 {
+		t.Fatalf("articles: %d", c)
+	}
+	_, m := ada.call("POST", "/v1/support/messages", map[string]string{"body": "My transfer hasn't arrived"}, nil)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 2 || !strings.HasPrefix(msgs[1].(map[string]any)["body"].(string), "My transfer hasn't arrived") {
+		t.Fatalf("bot answer: %v", msgs)
+	}
+	_, m = ada.call("POST", "/v1/support/messages", map[string]string{"body": "let me speak to an agent"}, nil)
+	if last := m["messages"].([]any)[3].(map[string]any); !strings.Contains(last["body"].(string), "support team") {
+		t.Errorf("handoff: %v", last)
+	}
+	if c, _ := ada.call("POST", "/v1/support/messages", map[string]string{"body": "  "}, nil); c != http.StatusBadRequest {
+		t.Errorf("empty: %d", c)
+	}
+
+	// Ada's user id is 1 in a fresh database.
+	if c, _ := ada.call("POST", "/v1/ops/support/1/reply", map[string]string{"body": "Hi Ada, looking now."}, nil); c != http.StatusUnauthorized {
+		t.Errorf("reply without ops key: %d", c)
+	}
+	if c, e := ada.call("POST", "/v1/ops/support/1/reply", map[string]string{"body": "Hi Ada, looking now."},
+		map[string]string{"X-Ops-Key": opsKey}); c != http.StatusNoContent {
+		t.Fatalf("reply: %d %v", c, e)
+	}
+	_, m = ada.call("GET", "/v1/support/messages", nil, nil)
+	if last := m["messages"].([]any)[4].(map[string]any); last["sender"] != "agent" {
+		t.Errorf("agent message: %v", last)
+	}
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["title"] != "Support replied" {
+		t.Errorf("notification = %v", first)
 	}
 }
