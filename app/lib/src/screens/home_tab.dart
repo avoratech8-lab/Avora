@@ -28,8 +28,6 @@ class HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<HomeTab> {
-  bool _hide = false;
-
   ShellScreenState get shell => widget.shell;
 
   Future<void> _go(Widget page) async {
@@ -93,12 +91,18 @@ class _HomeTabState extends State<HomeTab> {
             else if (wallet == null)
               _LoadError(onRetry: shell.refresh)
             else
-              _BalanceCard(
-                wallet: wallet,
-                hidden: _hide,
-                onToggle: () => setState(() => _hide = !_hide),
-                onAdd: () => showReceiveSheet(context, wallet.accountNumber),
-                onSend: () => _go(const SendScreen()),
+              ListenableBuilder(
+                listenable: AppScope.of(context).preferences,
+                builder: (context, _) => _BalanceCard(
+                  wallet: wallet,
+                  hidden: AppScope.of(context).preferences.hideBalance,
+                  onToggle: () {
+                    final prefs = AppScope.of(context).preferences;
+                    prefs.setHideBalance(!prefs.hideBalance);
+                  },
+                  onAdd: () => showReceiveSheet(context, wallet.accountNumber),
+                  onSend: () => _go(const SendScreen()),
+                ),
               ),
             const SizedBox(height: 24),
             _QuickActions(

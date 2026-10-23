@@ -26,28 +26,44 @@ class ShellScreenState extends State<ShellScreen> {
   bool loading = true;
   Object? error;
 
+  bool _started = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (wallet == null && error == null) refresh();
+    if (_started) return;
+    _started = true;
+    // Show what Home looked like last time straight away, then refresh.
+    final cached = AppScope.of(context).preferences.cachedHome;
+    if (cached != null) {
+      wallet = cached.$1;
+      lines = cached.$2;
+      loading = false;
+    }
+    refresh();
   }
 
   Future<void> refresh() async {
-    final api = AppScope.of(context).api;
+    final scope = AppScope.of(context);
+    final api = scope.api;
+    // All four in parallel: one round trip instead of three. The bell and
+    // the tier are extras, so Home still shows if they fail.
+    final unreadF = api.notifications().then((n) => n.$2, onError: (_) => unread);
+    final tierF = api.kycStatus().then((s) => s.tier, onError: (_) => tier);
     try {
-      final results = await Future.wait([api.wallet(), api.statement()]);
-      // The bell and the tier are extras; the wallet still shows without them.
-      final unreadNow = await api.notifications().then((n) => n.$2, onError: (_) => unread);
-      final tierNow = await api.kycStatus().then((s) => s.tier, onError: (_) => tier);
+      final (w, l) = await (api.wallet(), api.statement()).wait;
+      final unreadNow = await unreadF;
+      final tierNow = await tierF;
       if (!mounted) return;
       setState(() {
-        wallet = results[0] as Wallet;
-        lines = results[1] as List<StatementLine>;
+        wallet = w;
+        lines = l;
         unread = unreadNow;
         tier = tierNow;
         error = null;
         loading = false;
       });
+      scope.preferences.cacheHome(w, l);
     } catch (e) {
       if (!mounted) return;
       setState(() {

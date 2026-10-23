@@ -23,6 +23,8 @@ class Wallet {
   final int id;
   final String accountNumber;
   final int balance; // kobo
+
+  Map<String, dynamic> toJson() => {'id': id, 'account_number': accountNumber, 'balance': balance};
 }
 
 class StatementLine {
@@ -49,6 +51,14 @@ class StatementLine {
   final DateTime at;
 
   bool get isTransfer => kind.startsWith('transfer_');
+
+  Map<String, dynamic> toJson() => {
+    'kind': kind,
+    'description': description,
+    'ref': ref,
+    'amount': amount,
+    'at': at.toUtc().toIso8601String(),
+  };
 }
 
 class Quote {

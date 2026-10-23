@@ -141,6 +141,9 @@ class ProfileTab extends StatelessWidget {
             _Item(Icons.password_rounded, 'Change PIN', () => go(const ChangePinScreen())),
             _Item(Icons.devices_rounded, 'Phones signed in', () => go(const DevicesScreen())),
           ]),
+          _Section('App', [
+            _Item(Icons.dark_mode_outlined, 'Appearance', () => _pickTheme(context), key: const Key('appearance')),
+          ]),
           _Section('Help', [
             _Item(
               Icons.support_agent_rounded,
@@ -176,6 +179,34 @@ class ProfileTab extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> _pickTheme(BuildContext context) async {
+  final prefs = AppScope.of(context).preferences;
+  final m = await showModalBottomSheet<ThemeMode>(
+    context: context,
+    showDragHandle: true,
+    builder: (c) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final (mode, label, icon) in const [
+            (ThemeMode.system, 'Match my phone', Icons.brightness_auto_rounded),
+            (ThemeMode.light, 'Light', Icons.light_mode_rounded),
+            (ThemeMode.dark, 'Dark', Icons.dark_mode_rounded),
+          ])
+            ListTile(
+              key: Key('theme-${mode.name}'),
+              leading: Icon(icon),
+              title: Text(label),
+              trailing: mode == prefs.theme ? const Icon(Icons.check_rounded, color: Brand.green) : null,
+              onTap: () => Navigator.pop(c, mode),
+            ),
+        ],
+      ),
+    ),
+  );
+  if (m != null) await prefs.setTheme(m);
 }
 
 class _Item {
