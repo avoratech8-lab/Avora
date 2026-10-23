@@ -28,6 +28,8 @@ import (
 	"avora/backend/internal/rails"
 	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/schedules"
+	"avora/backend/internal/splits"
 	"avora/backend/internal/support"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
@@ -97,6 +99,8 @@ func run(log *slog.Logger) error {
 		Support:       support.NewService(pool),
 		P2P:           p2p.NewService(pool),
 		Insights:      insights.NewService(pool),
+		Schedules:     schedules.NewService(pool),
+		Splits:        splits.NewService(pool),
 		Cards:         cards.NewService(pool, sys, []byte(authSecret)),
 		Sandbox:       os.Getenv("SANDBOX") != "off",
 		Auth:          authSvc,
@@ -110,6 +114,13 @@ func run(log *slog.Logger) error {
 			log.Error("requery", "err", err)
 		} else if n > 0 {
 			log.Info("requeried transfers", "count", n)
+		}
+	})
+	go every(ctx, time.Minute, func() {
+		if n, err := srv.RunSchedules(ctx); err != nil {
+			log.Error("scheduled payments", "err", err)
+		} else if n > 0 {
+			log.Info("ran scheduled payments", "count", n)
 		}
 	})
 	go every(ctx, time.Hour, func() {

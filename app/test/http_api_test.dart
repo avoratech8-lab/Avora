@@ -376,4 +376,89 @@ void main() {
     expect((r.on, r.extraFor(245000)), (true, 5000));
     expect('${requests.last.method} ${requests.last.url.path}', 'PUT /v1/me/roundup');
   });
+
+  test('schedules and splits send what the server expects and parse what it returns', () async {
+    await creds.setToken('tok');
+    final schedule = {
+      'id': 's1',
+      'kind': 'transfer',
+      'name': 'Rent',
+      'amount': 15000000,
+      'frequency': 'monthly',
+      'starts_at': '2026-11-01T08:00:00Z',
+      'next_run': '2026-11-01T08:00:00Z',
+      'runs': 0,
+      'status': 'active',
+      'target': {'bank_code': '058', 'account_number': '0123456781', 'account_name': 'ADA OBI'},
+      'last_run_at': null,
+      'last_ok': null,
+      'last_message': '',
+      'created_at': '2026-10-23T12:00:00Z',
+    };
+    final split = {
+      'id': 'sp1',
+      'title': 'Dinner',
+      'total': 900000,
+      'creator': 'Tolu (@tolu)',
+      'mine': false,
+      'shares': [
+        {'name': 'Ada', 'tag': 'ada', 'amount': 300000, 'status': 'pending', 'you': true},
+        {'name': 'Chidi', 'tag': 'chidi', 'amount': 300000, 'status': 'paid', 'you': false},
+      ],
+      'collected': 300000,
+      'created_at': '2026-10-23T12:00:00Z',
+    };
+    final api = apiWith(
+      (r) => switch (r.url.path) {
+        '/v1/schedules' when r.method == 'GET' => json({
+          'schedules': [schedule],
+          'sandbox': true,
+        }),
+        '/v1/schedules/s1' => http.Response('', 204),
+        '/v1/splits' when r.method == 'GET' => json({
+          'splits': [split],
+        }),
+        final p when p.startsWith('/v1/splits') => json(split),
+        _ => json(schedule),
+      },
+    );
+    final list = await api.schedules();
+    expect(
+      (list.sandbox, list.schedules.single.frequency, list.schedules.single.lastOk),
+      (true, Frequency.monthly, null),
+    );
+    await api.createSchedule(
+      kind: ScheduleKind.transfer,
+      name: 'Rent',
+      amount: 15000000,
+      frequency: Frequency.monthly,
+      startsAt: DateTime.utc(2026, 11, 1, 8),
+      target: const ScheduleTarget(bankCode: '058', accountNumber: '0123456781'),
+      pin: '135790',
+    );
+    expect(jsonDecode(requests.last.body), {
+      'kind': 'transfer',
+      'name': 'Rent',
+      'amount': 15000000,
+      'frequency': 'monthly',
+      'starts_at': '2026-11-01T08:00:00.000Z',
+      'target': {'bank_code': '058', 'account_number': '0123456781'},
+      'pin': '135790',
+    });
+    await api.cancelSchedule('s1');
+    expect(requests.last.method, 'DELETE');
+
+    final sp = (await api.splits()).single;
+    expect((sp.awaitingMe, sp.asked, sp.pendingCount), (true, 600000, 1));
+    await api.createSplit(title: 'Dinner', total: 900000, people: [('@chidi', 300000)]);
+    expect(jsonDecode(requests.last.body), {
+      'title': 'Dinner',
+      'total': 900000,
+      'people': [
+        {'to': '@chidi', 'amount': 300000},
+      ],
+    });
+    await api.paySplit('sp1', '135790');
+    expect('${requests.last.method} ${requests.last.url.path}', 'POST /v1/splits/sp1/pay');
+  });
 }

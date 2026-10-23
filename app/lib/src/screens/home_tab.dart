@@ -17,8 +17,10 @@ import 'notifications_screen.dart';
 import 'profile_screen.dart';
 import 'open_line.dart';
 import 'receive_sheet.dart';
+import 'schedule_screens.dart';
 import 'send_screen.dart';
 import 'shell_screen.dart';
+import 'split_screens.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key, required this.shell});
@@ -175,6 +177,7 @@ class _HomeTabState extends State<HomeTab> {
   void _more(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       builder: (sheet) {
         Widget tile(String label, IconData icon, VoidCallback onTap) => ListTile(
           leading: Icon(icon),
@@ -186,23 +189,27 @@ class _HomeTabState extends State<HomeTab> {
           },
         );
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              tile('Receive money', Icons.south_west_rounded, () {
-                final w = shell.wallet;
-                if (w != null) showReceiveSheet(context, w.accountNumber);
-              }),
-              tile('Request money', Icons.request_page_outlined, () {
-                final w = shell.wallet;
-                if (w != null) _go(RequestMoneyScreen(accountNumber: w.accountNumber));
-              }),
-              tile('Scan to pay', Icons.qr_code_scanner_rounded, () => _go(const ScanScreen())),
-              tile('Internet', Icons.router_rounded, () => _bills(BillCategory.internet)),
-              tile('Exam PINs: WAEC, NECO, JAMB', Icons.school_rounded, () => _bills(BillCategory.education)),
-              tile('Refer and earn', Icons.card_giftcard_rounded, () => _go(const InviteScreen())),
-              const SizedBox(height: 8),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                tile('Split a bill', Icons.call_split_rounded, () => _go(const SplitsScreen())),
+                tile('Scheduled payments', Icons.event_repeat_rounded, () => _go(const SchedulesScreen())),
+                tile('Receive money', Icons.south_west_rounded, () {
+                  final w = shell.wallet;
+                  if (w != null) showReceiveSheet(context, w.accountNumber);
+                }),
+                tile('Request money', Icons.request_page_outlined, () {
+                  final w = shell.wallet;
+                  if (w != null) _go(RequestMoneyScreen(accountNumber: w.accountNumber));
+                }),
+                tile('Scan to pay', Icons.qr_code_scanner_rounded, () => _go(const ScanScreen())),
+                tile('Internet', Icons.router_rounded, () => _bills(BillCategory.internet)),
+                tile('Exam PINs: WAEC, NECO, JAMB', Icons.school_rounded, () => _bills(BillCategory.education)),
+                tile('Refer and earn', Icons.card_giftcard_rounded, () => _go(const InviteScreen())),
+                const SizedBox(height: 8),
+              ],
+            ),
           ),
         );
       },

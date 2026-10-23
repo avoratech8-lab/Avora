@@ -732,3 +732,258 @@ class RoundUp {
   /// What a payment of [amount] would save.
   int extraFor(int amount) => !on || amount % step == 0 ? 0 : step - amount % step;
 }
+
+/// How often a scheduled payment runs.
+enum Frequency {
+  once('Once'),
+  daily('Every day'),
+  weekly('Every week'),
+  monthly('Every month');
+
+  const Frequency(this.label);
+
+  final String label;
+
+  static Frequency parse(String s) => values.firstWhere((f) => f.name == s, orElse: () => Frequency.once);
+
+  /// The [n]th run after [start] (the 0th is [start]). Monthly runs keep the
+  /// day, or use the month's last day when it is shorter.
+  DateTime at(DateTime start, int n) => switch (this) {
+    Frequency.once => start,
+    Frequency.daily => DateTime(start.year, start.month, start.day + n, start.hour, start.minute, start.second),
+    Frequency.weekly => DateTime(start.year, start.month, start.day + 7 * n, start.hour, start.minute, start.second),
+    Frequency.monthly => () {
+      final m = start.month - 1 + n;
+      final y = start.year + m ~/ 12;
+      final month = m % 12 + 1;
+      final last = DateTime(y, month + 1, 0).day;
+      return DateTime(y, month, start.day < last ? start.day : last, start.hour, start.minute, start.second);
+    }(),
+  };
+}
+
+/// What a scheduled payment pays.
+enum ScheduleKind {
+  avora('Avora', 'To an Avora tag or phone'),
+  transfer('Bank', 'To any bank account'),
+  bill('Bill', 'Airtime, data, TV or power'),
+  savings('Savings', 'Into a goal pot');
+
+  const ScheduleKind(this.label, this.hint);
+
+  final String label;
+  final String hint;
+
+  static ScheduleKind parse(String s) => values.firstWhere((k) => k.name == s, orElse: () => ScheduleKind.avora);
+}
+
+/// Who or what a scheduled payment goes to. Only the fields its kind needs
+/// are set; [accountName] is what the payee was checked as.
+class ScheduleTarget {
+  const ScheduleTarget({
+    this.bankCode = '',
+    this.accountNumber = '',
+    this.accountName = '',
+    this.to = '',
+    this.billerId = '',
+    this.planCode = '',
+    this.customer = '',
+    this.potId = '',
+  });
+
+  factory ScheduleTarget.fromJson(Map<String, dynamic> j) => ScheduleTarget(
+    bankCode: j['bank_code'] as String? ?? '',
+    accountNumber: j['account_number'] as String? ?? '',
+    accountName: j['account_name'] as String? ?? '',
+    to: j['to'] as String? ?? '',
+    billerId: j['biller_id'] as String? ?? '',
+    planCode: j['plan_code'] as String? ?? '',
+    customer: j['customer'] as String? ?? '',
+    potId: j['pot_id'] as String? ?? '',
+  );
+
+  final String bankCode;
+  final String accountNumber;
+  final String accountName;
+  final String to;
+  final String billerId;
+  final String planCode;
+  final String customer;
+  final String potId;
+
+  Map<String, dynamic> toJson() => {
+    if (bankCode.isNotEmpty) 'bank_code': bankCode,
+    if (accountNumber.isNotEmpty) 'account_number': accountNumber,
+    if (to.isNotEmpty) 'to': to,
+    if (billerId.isNotEmpty) 'biller_id': billerId,
+    if (planCode.isNotEmpty) 'plan_code': planCode,
+    if (customer.isNotEmpty) 'customer': customer,
+    if (potId.isNotEmpty) 'pot_id': potId,
+  };
+}
+
+enum ScheduleStatus { active, paused, done, cancelled }
+
+/// A payment that repeats, or happens once on a later date.
+class Schedule {
+  Schedule({
+    required this.id,
+    required this.kind,
+    required this.name,
+    required this.amount,
+    required this.frequency,
+    required this.startsAt,
+    required this.nextRun,
+    required this.runs,
+    required this.status,
+    required this.target,
+    this.lastRunAt,
+    this.lastOk,
+    this.lastMessage = '',
+  });
+
+  factory Schedule.fromJson(Map<String, dynamic> j) => Schedule(
+    id: j['id'] as String,
+    kind: ScheduleKind.parse(j['kind'] as String),
+    name: j['name'] as String,
+    amount: j['amount'] as int,
+    frequency: Frequency.parse(j['frequency'] as String),
+    startsAt: DateTime.parse(j['starts_at'] as String),
+    nextRun: DateTime.parse(j['next_run'] as String),
+    runs: j['runs'] as int? ?? 0,
+    status: ScheduleStatus.values.firstWhere((s) => s.name == j['status'], orElse: () => ScheduleStatus.active),
+    target: ScheduleTarget.fromJson(j['target'] as Map<String, dynamic>? ?? const {}),
+    lastRunAt: j['last_run_at'] == null ? null : DateTime.parse(j['last_run_at'] as String),
+    lastOk: j['last_ok'] as bool?,
+    lastMessage: j['last_message'] as String? ?? '',
+  );
+
+  final String id;
+  final ScheduleKind kind;
+  final String name;
+  final int amount;
+  final Frequency frequency;
+  final DateTime startsAt;
+  final DateTime nextRun;
+  final int runs;
+  final ScheduleStatus status;
+  final ScheduleTarget target;
+  final DateTime? lastRunAt;
+  final bool? lastOk;
+  final String lastMessage;
+
+  bool get active => status == ScheduleStatus.active;
+  bool get paused => status == ScheduleStatus.paused;
+  bool get done => status == ScheduleStatus.done;
+
+  Schedule copyWith({
+    DateTime? nextRun,
+    int? runs,
+    ScheduleStatus? status,
+    DateTime? lastRunAt,
+    bool? lastOk,
+    String? lastMessage,
+  }) => Schedule(
+    id: id,
+    kind: kind,
+    name: name,
+    amount: amount,
+    frequency: frequency,
+    startsAt: startsAt,
+    nextRun: nextRun ?? this.nextRun,
+    runs: runs ?? this.runs,
+    status: status ?? this.status,
+    target: target,
+    lastRunAt: lastRunAt ?? this.lastRunAt,
+    lastOk: lastOk ?? this.lastOk,
+    lastMessage: lastMessage ?? this.lastMessage,
+  );
+}
+
+/// The customer's schedules, and whether they can be run on demand to try
+/// them out.
+class ScheduleList {
+  ScheduleList({required this.schedules, required this.sandbox});
+
+  factory ScheduleList.fromJson(Map<String, dynamic> j) => ScheduleList(
+    schedules: [for (final s in (j['schedules'] as List? ?? const [])) Schedule.fromJson(s as Map<String, dynamic>)],
+    sandbox: j['sandbox'] as bool? ?? false,
+  );
+
+  final List<Schedule> schedules;
+  final bool sandbox;
+}
+
+enum ShareStatus { pending, paid, declined }
+
+/// One person's part of a split bill.
+class SplitShare {
+  const SplitShare({
+    required this.name,
+    required this.tag,
+    required this.amount,
+    required this.status,
+    this.you = false,
+  });
+
+  factory SplitShare.fromJson(Map<String, dynamic> j) => SplitShare(
+    name: j['name'] as String? ?? '',
+    tag: j['tag'] as String? ?? '',
+    amount: j['amount'] as int,
+    status: ShareStatus.values.firstWhere((s) => s.name == j['status'], orElse: () => ShareStatus.pending),
+    you: j['you'] as bool? ?? false,
+  );
+
+  final String name;
+  final String tag;
+  final int amount;
+  final ShareStatus status;
+  final bool you;
+
+  String get label => name.isNotEmpty ? name : (tag.isNotEmpty ? '@$tag' : 'Avora customer');
+}
+
+/// A bill one customer paid and asked others to chip in for.
+class SplitBill {
+  SplitBill({
+    required this.id,
+    required this.title,
+    required this.total,
+    required this.creator,
+    required this.mine,
+    required this.shares,
+    required this.collected,
+    required this.createdAt,
+  });
+
+  factory SplitBill.fromJson(Map<String, dynamic> j) => SplitBill(
+    id: j['id'] as String,
+    title: j['title'] as String,
+    total: j['total'] as int,
+    creator: j['creator'] as String? ?? '',
+    mine: j['mine'] as bool? ?? false,
+    shares: [for (final s in (j['shares'] as List? ?? const [])) SplitShare.fromJson(s as Map<String, dynamic>)],
+    collected: j['collected'] as int? ?? 0,
+    createdAt: DateTime.parse(j['created_at'] as String),
+  );
+
+  final String id;
+  final String title;
+  final int total;
+  final String creator; // "Name (@tag)"
+  final bool mine; // the viewer asked
+  final List<SplitShare> shares;
+  final int collected;
+  final DateTime createdAt;
+
+  /// The viewer's own share when someone else asked them.
+  SplitShare? get myShare => shares.where((s) => s.you).firstOrNull;
+
+  /// Asked of the viewer and not answered yet.
+  bool get awaitingMe => myShare?.status == ShareStatus.pending;
+
+  /// What was asked of everyone else together.
+  int get asked => shares.fold(0, (a, s) => a + s.amount);
+
+  int get pendingCount => shares.where((s) => s.status == ShareStatus.pending).length;
+}

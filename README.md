@@ -21,6 +21,8 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - **Spending insights and budgets.** `GET /v1/me/insights?month=2026-10` totals a month (Lagos time) from the ledger: money in, spending by category net of refunds, money saved, cashback, daily spending and last month's total. Budgets per category or for all spending (`GET /v1/me/budgets`, `PUT /v1/me/budgets/{category}` with `{"amount"}`, 0 removes) send a notification at 80% and at 100%, once each a month.
 - **Virtual cards (sandbox).** Up to 3 cards per customer that spend straight from the wallet: create, freeze, monthly limit, details behind the PIN, close, and a payment list. `Charge` approves or declines (frozen, over limit, short of money) and notifies the customer either way. Card numbers are never stored; until a card issuer is signed they are derived from the card id on a test Verve range. `POST /v1/sandbox/cards/{id}/charge` stands in for the card scheme; set `SANDBOX=off` in production.
 - **Round-ups.** Save the change from every transfer, bill, Avora payment and card payment into a goal pot, rounding to the next ₦10, ₦100 or ₦1,000 (`GET/PUT /v1/me/roundup`). Skipped when the wallet is short.
+- **Scheduled payments.** Pay a bank account, an Avora tag or phone, a bill or a goal pot once, daily, weekly or monthly (`GET/POST /v1/schedules`, `POST /v1/schedules/{id}/pause` with `{"paused"}`, `DELETE /v1/schedules/{id}`). The payee is checked when it's set up, with the PIN, so each run goes ahead without asking. Monthly runs keep the day, or use the last day of a shorter month. Every minute the server claims what's due (`for update skip locked`, so several servers can run it), pays it under the same daily limit as a payment made by hand, and tells the customer how it went. Resuming a paused schedule skips the runs it missed. `POST /v1/sandbox/schedules/{id}/run` runs one now.
+- **Split bills.** Ask 1 to 10 Avora customers by tag or phone to chip in for a bill (`POST /v1/splits` with `{"title", "total", "people": [{"to", "amount"}]}`). Each gets a notification and pays (`POST /v1/splits/{id}/pay` with `{"pin"}`, a free Avora transfer to whoever asked) or declines (`POST /v1/splits/{id}/decline`), once. The asker is told either way. `GET /v1/splits` and `GET /v1/splits/{id}` show who has paid.
 - **Security settings.** Change PIN (`POST /v1/me/pin`, which signs out other phones), check the PIN to unlock the app (`POST /v1/me/pin/verify`), and list or remove phones (`GET /v1/me/devices`, `DELETE /v1/me/devices/{id}`). The app sends `X-Device-Name` at sign-in so phones have names.
 - **Notifications.** Money received, transfers delivered, refunded or under review, bill refunds, new phone sign-ins, PIN changes and tier upgrades: `GET /v1/me/notifications` and `POST /v1/me/notifications/read`.
 - **Referrals.** Each customer gets an invite code (`GET /v1/me/referrals`). A friend can add it within 30 days of joining (`POST /v1/me/referrals`). When that friend first reaches Tier 2, the inviter is paid ₦500 from `system:referral_rewards`, once per friend. The amount is a placeholder until marketing sets a budget.
@@ -73,6 +75,8 @@ The Flutter app covers:
 - **Spending insights:** what you spent this month against last month, day-by-day bars, where it went by category, and monthly budgets (overall or per category) with alerts at 80% and 100%.
 - **Cards:** a free virtual card for paying online, with freeze, monthly limit, number and CVV behind the PIN, payments, and a test payment button in the sandbox.
 - **Round-ups:** turn on from Savings and pick the pot and step.
+- **Scheduled payments:** rent, school fees, a monthly data plan or a weekly save, set once from Me or Home → More. Shows what will go out this month, each schedule's next date and how the last run went, with pause, resume and delete.
+- **Split bills:** ask friends on Avora for their share, split evenly or by hand, watch who has paid, and pay or decline a request in one tap. Demo users get a request from @tolu to try it.
 - **Activity:** money in and out totals, search and filters, grouped by day.
 - **Security:** fingerprint or face unlock, an app lock (immediately, after 1 or after 5 minutes away) with PIN fallback, fingerprint or face approval for payments, change PIN, and phones signed in. With biometrics on, the PIN is kept in the phone's Keystore/Keychain and only released after a fingerprint or face check, so the server still checks the PIN on every payment.
 - **Limits:** your KYC tier and what it allows, and BVN or NIN verification to move up.
@@ -158,6 +162,13 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | POST | `/v1/cards/{id}/terminate` | `{"pin"}`: close the card |
 | GET | `/v1/cards/{id}/payments` | Recent card payments |
 | GET/PUT | `/v1/me/roundup` | `{"pot_id", "step"}`; empty pot turns it off |
+| GET/POST | `/v1/schedules` | My scheduled payments / `{"kind", "name", "amount", "frequency", "starts_at", "target", "pin"}` |
+| POST | `/v1/schedules/{id}/pause` | `{"paused"}` |
+| DELETE | `/v1/schedules/{id}` | Stop a scheduled payment |
+| GET/POST | `/v1/splits` | Splits I asked or was asked in / `{"title", "total", "people"}` |
+| GET | `/v1/splits/{id}` | Who owes what |
+| POST | `/v1/splits/{id}/pay` | `{"pin"}`: pay my share |
+| POST | `/v1/splits/{id}/decline` | Decline my share |
 | GET | `/v1/me/referrals` | My invite code and rewards |
 | POST | `/v1/me/referrals` | `{"code"}`: the code I was invited with |
 | GET | `/v1/help/articles` | Help centre articles |

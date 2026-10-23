@@ -346,6 +346,80 @@ class HttpAvoraApi implements AvoraApi {
       RoundUp.fromJson(await _call('PUT', '/v1/me/roundup', body: {'pot_id': potId, 'step': step}));
 
   @override
+  Future<ScheduleList> schedules() async => ScheduleList.fromJson(await _call('GET', '/v1/schedules'));
+
+  @override
+  Future<Schedule> createSchedule({
+    required ScheduleKind kind,
+    required String name,
+    required int amount,
+    required Frequency frequency,
+    required DateTime startsAt,
+    required ScheduleTarget target,
+    required String pin,
+  }) async => Schedule.fromJson(
+    await _call(
+      'POST',
+      '/v1/schedules',
+      body: {
+        'kind': kind.name,
+        'name': name,
+        'amount': amount,
+        'frequency': frequency.name,
+        'starts_at': startsAt.toUtc().toIso8601String(),
+        'target': target.toJson(),
+        'pin': pin,
+      },
+    ),
+  );
+
+  @override
+  Future<Schedule> pauseSchedule(String id, bool paused) async =>
+      Schedule.fromJson(await _call('POST', '/v1/schedules/$id/pause', body: {'paused': paused}));
+
+  @override
+  Future<void> cancelSchedule(String id) => _call('DELETE', '/v1/schedules/$id');
+
+  @override
+  Future<Schedule> runScheduleNow(String id) async =>
+      Schedule.fromJson(await _call('POST', '/v1/sandbox/schedules/$id/run'));
+
+  @override
+  Future<List<SplitBill>> splits() async {
+    final j = await _call('GET', '/v1/splits');
+    return [for (final s in (j['splits'] as List? ?? const [])) SplitBill.fromJson(s as Map<String, dynamic>)];
+  }
+
+  @override
+  Future<SplitBill> split(String id) async => SplitBill.fromJson(await _call('GET', '/v1/splits/$id'));
+
+  @override
+  Future<SplitBill> createSplit({
+    required String title,
+    required int total,
+    required List<(String, int)> people,
+  }) async => SplitBill.fromJson(
+    await _call(
+      'POST',
+      '/v1/splits',
+      body: {
+        'title': title,
+        'total': total,
+        'people': [
+          for (final (to, amount) in people) {'to': to, 'amount': amount},
+        ],
+      },
+    ),
+  );
+
+  @override
+  Future<SplitBill> paySplit(String id, String pin) async =>
+      SplitBill.fromJson(await _call('POST', '/v1/splits/$id/pay', body: {'pin': pin}));
+
+  @override
+  Future<SplitBill> declineSplit(String id) async => SplitBill.fromJson(await _call('POST', '/v1/splits/$id/decline'));
+
+  @override
   Future<ReferralSummary> referrals() async => ReferralSummary.fromJson(await _call('GET', '/v1/me/referrals'));
 
   @override

@@ -307,13 +307,14 @@ void main() {
     await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
     await tester.pumpAndSettle();
 
-    expect(find.descendant(of: find.byKey(const Key('bell')), matching: find.text('1')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('bell')), matching: find.text('2')), findsOneWidget);
     await tester.tap(find.byKey(const Key('bell')));
     await tester.pumpAndSettle();
     expect(find.text('Welcome to Avora'), findsOneWidget);
+    expect(find.text('Tolu Adeyemi (@tolu) asked you for ₦2,500.00'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.descendant(of: find.byKey(const Key('bell')), matching: find.text('1')), findsNothing);
+    expect(find.descendant(of: find.byKey(const Key('bell')), matching: find.text('2')), findsNothing);
   });
 
   testWidgets('change PIN: wrong confirmation, then the new PIN works', (tester) async {
@@ -699,5 +700,87 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('next ₦1,000, into Change jar'), findsOneWidget);
     expect((await api.roundUp()).step, 100000);
+  });
+
+  testWidgets('schedule a weekly payment, then run it now', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await openMe(tester, const Key('me-schedules'));
+    expect(find.text('Set it once, never forget'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('schedule-new')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('schedule-to')), '@tolu');
+    await tester.enterText(find.byKey(const Key('schedule-amount')), '2000');
+    await tester.enterText(find.byKey(const Key('schedule-name')), 'Pocket money');
+    await tester.tap(find.byKey(const Key('freq-weekly')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('₦2,000 every week: '), findsOneWidget);
+    await tester.tap(find.byKey(const Key('schedule-save')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    // It starts today, so it paid as soon as the list loaded.
+    expect(find.byKey(const Key('schedule-Pocket money')), findsOneWidget);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 200000);
+    await tester.tap(find.byKey(const Key('schedule-Pocket money')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('schedule-run')));
+    await tester.pumpAndSettle();
+    expect(find.text('Paid ₦2,000'), findsOneWidget);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 400000);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.tap(find.byKey(const Key('schedule-Pocket money')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('schedule-pause')));
+    await tester.pumpAndSettle();
+    expect(find.text('Paused'), findsWidgets);
+  });
+
+  testWidgets("pay a friend's split, then split a bill of your own", (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Split a bill'));
+    await tester.pumpAndSettle();
+    expect(find.text('Waiting on you'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('split-Suya night')));
+    await tester.pumpAndSettle();
+    expect(find.text('Your share: ₦2,500'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('split-pay')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    expect(find.text('You paid ₦2,500'), findsOneWidget);
+    expect(find.byKey(const Key('split-pay')), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Answered'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('split-new')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('split-title')), 'Dinner');
+    await tester.enterText(find.byKey(const Key('split-total')), '9000');
+    for (final who in ['@tolu', '@chidi']) {
+      await tester.enterText(find.byKey(const Key('split-person')), who);
+      await tester.tap(find.byKey(const Key('split-add')));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('₦3,000.00'), findsNWidgets(2));
+    expect(find.textContaining('You cover ₦3,000.00'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5)); // let the snackbar go
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('split-send')));
+    await tester.pumpAndSettle();
+    expect(find.text('₦0 of ₦6,000 back'), findsOneWidget);
+    expect((await api.splits()).first.title, 'Dinner');
   });
 }

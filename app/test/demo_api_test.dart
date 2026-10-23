@@ -106,7 +106,7 @@ void main() {
 
     final (items, unread) = await api.notifications();
     expect(items.first.title, "You're now on Tier 3");
-    expect(unread, 3); // welcome, tier 2, tier 3
+    expect(unread, 4); // welcome, Tolu's split, tier 2, tier 3
     await api.markNotificationsRead();
     expect((await api.notifications()).$2, 0);
   });
@@ -419,5 +419,102 @@ void main() {
     expect((await api.cards()).cards, isEmpty);
     await api.setRoundUp(potId: '', step: 10000);
     expect((await api.roundUp()).on, isFalse);
+  });
+
+  test('schedules run on their date, skip ahead, and say when they fail', () async {
+    final weekly = await api.createSchedule(
+      kind: ScheduleKind.avora,
+      name: 'Pocket money',
+      amount: 300000,
+      frequency: Frequency.weekly,
+      startsAt: now,
+      target: const ScheduleTarget(to: '@TOLU'),
+      pin: '135790',
+    );
+    expect((weekly.target.to, weekly.target.accountName), ('@tolu', 'Tolu Adeyemi'));
+    await expectLater(
+      api.createSchedule(
+        kind: ScheduleKind.avora,
+        name: '',
+        amount: 100,
+        frequency: Frequency.once,
+        startsAt: now,
+        target: const ScheduleTarget(to: '@tolu'),
+        pin: '000000',
+      ),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'wrong_pin')),
+    );
+
+    // Opening the list pays what's due and moves it to next week.
+    var list = (await api.schedules()).schedules;
+    expect((list.single.runs, list.single.lastOk, list.single.nextRun), (1, true, DateTime(2026, 10, 30, 12)));
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 300000);
+    expect((await api.notifications()).$1.first.title, 'Scheduled: ₦3,000.00 for Pocket money');
+
+    // Three weeks away pays once, not three times.
+    now = DateTime(2026, 11, 20, 13);
+    list = (await api.schedules()).schedules;
+    expect((list.single.runs, list.single.nextRun), (2, DateTime(2026, 11, 27, 12)));
+
+    await api.pauseSchedule(weekly.id, true);
+    now = DateTime(2026, 12, 20, 13);
+    expect((await api.schedules()).schedules.single.runs, 2);
+    final resumed = await api.pauseSchedule(weekly.id, false);
+    expect(resumed.nextRun, DateTime(2026, 12, 25, 12));
+
+    final big = await api.createSchedule(
+      kind: ScheduleKind.transfer,
+      name: 'Car',
+      amount: 4900000,
+      frequency: Frequency.once,
+      startsAt: now,
+      target: const ScheduleTarget(bankCode: '058', accountNumber: '0123456781'),
+      pin: '135790',
+    );
+    final ran = await api.runScheduleNow(big.id);
+    expect((ran.lastOk, ran.lastMessage, ran.done), (false, 'Your balance was too low.', true));
+    expect((await api.notifications()).$1.first.title, "Car didn't go");
+
+    await api.cancelSchedule(weekly.id);
+    expect((await api.schedules()).schedules.map((s) => s.name), ['Car']);
+  });
+
+  test('monthly schedules keep the day, or use the last day of a short month', () {
+    final start = DateTime(2026, 1, 31, 9);
+    expect(Frequency.monthly.at(start, 1), DateTime(2026, 2, 28, 9));
+    expect(Frequency.monthly.at(start, 2), DateTime(2026, 3, 31, 9));
+    expect(Frequency.monthly.at(start, 12), DateTime(2027, 1, 31, 9));
+    expect(Frequency.weekly.at(start, 1), DateTime(2026, 2, 7, 9));
+  });
+
+  test('splits: friends pay or decline, each once', () async {
+    // Tolu asked every new customer to chip in for suya.
+    final asked = (await api.splits()).single;
+    expect((asked.title, asked.awaitingMe, asked.myShare!.amount), ('Suya night', true, 250000));
+    final paid = await api.paySplit(asked.id, '135790');
+    expect(paid.myShare!.status, ShareStatus.paid);
+    await expectLater(
+      api.paySplit(asked.id, '135790'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'split_settled')),
+    );
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 250000);
+
+    await expectLater(
+      api.createSplit(title: 'Dinner', total: 900000, people: [('@tolu', 600000), ('@chidi', 600000)]),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'invalid_request')),
+    );
+    final mine = await api.createSplit(
+      title: 'Dinner',
+      total: 900000,
+      people: [('@tolu', 300000), ('08011110002', 300000)],
+    );
+    expect((mine.mine, mine.collected, mine.pendingCount), (true, 0, 2));
+
+    // Demo friends pay a few seconds later.
+    now = now.add(const Duration(seconds: 10));
+    final later = await api.split(mine.id);
+    expect((later.collected, later.pendingCount), (600000, 0));
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 250000 + 600000);
+    expect((await api.notifications()).$1.first.kind, 'split');
   });
 }
