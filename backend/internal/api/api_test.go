@@ -281,14 +281,16 @@ func TestBills(t *testing.T) {
 	}
 	body["pin"] = "482915"
 	code, pay := ada.call("POST", "/v1/bills/payments", body, map[string]string{"Idempotency-Key": "b1"})
-	if code != http.StatusOK || pay["status"] != "success" || pay["amount"] != float64(1_500_00) {
+	if code != http.StatusOK || pay["status"] != "success" || pay["amount"] != float64(1_500_00) ||
+		pay["cashback"] != float64(45_00) {
 		t.Fatalf("pay: %d %v", code, pay)
 	}
 	if code, again := ada.call("GET", "/v1/bills/payments/"+pay["id"].(string), nil, nil); code != http.StatusOK || again["id"] != pay["id"] {
 		t.Errorf("get: %d %v", code, again)
 	}
 	_, w := ada.call("GET", "/v1/me/wallet", nil, nil)
-	if w["balance"] != float64(7_500_00) {
+	if w["balance"] != float64(7_545_00) { // ₦45 cashback on ₦1,500 of data
+
 		t.Errorf("balance = %v", w["balance"])
 	}
 

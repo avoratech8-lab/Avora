@@ -1,4 +1,5 @@
-// Package bills pays for airtime, data, electricity and TV from a wallet.
+// Package bills pays for airtime, data, electricity, TV, internet and exam
+// PINs from a wallet.
 //
 // The amount moves from the wallet into in-flight before the provider is
 // asked. On success it settles out of the pooled settlement account; on a
@@ -48,7 +49,8 @@ type Payment struct {
 	CustomerName    string    `json:"customer_name"`
 	Amount          int64     `json:"amount"`
 	Status          Status    `json:"status"`
-	Token           string    `json:"token,omitempty"`
+	Cashback        int64     `json:"cashback"`        // earned on success; 0 if refunded
+	Token           string    `json:"token,omitempty"` // electricity token or exam PIN
 	Reference       string    `json:"reference,omitempty"`
 	FailureReason   string    `json:"failure_reason,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -75,9 +77,23 @@ func NewService(db *pgxpool.Pool, p Provider, sys wallets.System) *Service {
 
 func (s *Service) Billers() []Biller { return s.order }
 
+// Disable hides a category, so it can't be listed, checked or paid.
+func (s *Service) Disable(c Category) {
+	order := s.order[:0:0]
+	for _, b := range s.order {
+		if b.Category == c {
+			delete(s.billers, b.ID)
+		} else {
+			order = append(order, b)
+		}
+	}
+	s.order = order
+}
+
 var (
 	phoneRe    = regexp.MustCompile(`^0[789][01]\d{8}$`)
 	customerRe = regexp.MustCompile(`^\d{10,13}$`)
+	userIDRe   = regexp.MustCompile(`^[A-Za-z0-9]{4,20}$`)
 )
 
 func (s *Service) biller(id string) (Biller, error) {
@@ -89,9 +105,15 @@ func (s *Service) biller(id string) (Biller, error) {
 }
 
 func checkCustomer(b Biller, customer string) error {
-	if b.Category == Airtime || b.Category == Data {
+	if b.byPhone() {
 		if !phoneRe.MatchString(customer) {
 			return fmt.Errorf("%w: phone number must be 11 digits, like 08031234567", ErrInvalid)
+		}
+		return nil
+	}
+	if b.Category == Betting {
+		if !userIDRe.MatchString(customer) {
+			return fmt.Errorf("%w: user ID must be 4 to 20 letters or numbers", ErrInvalid)
 		}
 		return nil
 	}
@@ -195,6 +217,10 @@ func Description(b Biller, plan, customer string) string {
 		return fmt.Sprintf("%s data %s · %s", b.Name, plan, customer)
 	case Electricity:
 		return fmt.Sprintf("%s · meter %s", b.Name, customer)
+	case Education:
+		return fmt.Sprintf("%s %s", b.Name, plan)
+	case Betting:
+		return fmt.Sprintf("%s top-up · %s", b.Name, customer)
 	default:
 		return fmt.Sprintf("%s %s · %s", b.Name, plan, customer)
 	}
@@ -211,12 +237,12 @@ func (s *Service) hold(ctx context.Context, req PayRequest, b Biller, plan Plan,
 	var id string
 	err = tx.QueryRow(ctx, `
 		insert into bill_payments (idempotency_key, wallet_account_id, biller_id, biller_name, category,
-			plan_code, plan_name, customer, customer_name, amount, status, created_at, updated_at)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $11)
+			plan_code, plan_name, customer, customer_name, amount, cashback, status, created_at, updated_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12, 'pending', $11, $11)
 		on conflict (idempotency_key) do nothing
 		returning id`,
 		req.IdempotencyKey, req.WalletAccountID, b.ID, b.Name, b.Category, plan.Code, plan.Name,
-		req.Customer, name, req.Amount, now).Scan(&id)
+		req.Customer, name, req.Amount, now, b.Cashback(req.Amount)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent request with the same key won the race.
 		tx.Rollback(ctx)
@@ -281,9 +307,18 @@ func (s *Service) finalize(ctx context.Context, id string, to Status, res PayRes
 	if _, err := ledger.Post(ctx, tx, j); err != nil {
 		return Payment{}, err
 	}
+	cashback := p.Cashback
+	if to == Success && cashback > 0 {
+		if err := s.payCashback(ctx, tx, p, what); err != nil {
+			return Payment{}, err
+		}
+	} else {
+		cashback = 0
+	}
 	_, err = tx.Exec(ctx, `
-		update bill_payments set status = $2, token = $3, reference = $4, failure_reason = $5, updated_at = $6
-		where id = $1`, id, to, res.Token, res.Reference, res.Reason, s.now())
+		update bill_payments set status = $2, token = $3, reference = $4, failure_reason = $5, updated_at = $6,
+			cashback = $7
+		where id = $1`, id, to, res.Token, res.Reference, res.Reason, s.now(), cashback)
 	if err != nil {
 		return Payment{}, err
 	}
@@ -300,10 +335,26 @@ func (s *Service) finalize(ctx context.Context, id string, to Status, res PayRes
 	return p, tx.Commit(ctx)
 }
 
+// payCashback credits the wallet from the marketing budget.
+func (s *Service) payCashback(ctx context.Context, tx pgx.Tx, p Payment, what string) error {
+	var budget int64
+	if err := tx.QueryRow(ctx, `select id from accounts where code = 'system:cashback'`).Scan(&budget); err != nil {
+		return err
+	}
+	_, err := ledger.Post(ctx, tx, ledger.Journal{
+		IdempotencyKey: "bill:" + p.ID + ":cashback",
+		Kind:           "cashback",
+		Description:    "Cashback: " + what,
+		Ref:            p.ID,
+		Lines:          []ledger.Line{ledger.Debit(budget, p.Cashback), ledger.Credit(p.WalletAccountID, p.Cashback)},
+	})
+	return err
+}
+
 func (s *Service) Get(ctx context.Context, id string) (Payment, error) { return s.get(ctx, s.db, id) }
 
 const columns = `id, idempotency_key, wallet_account_id, biller_id, biller_name, category, plan_code, plan_name,
-	customer, customer_name, amount, status, token, reference, failure_reason, created_at, updated_at`
+	customer, customer_name, amount, cashback, status, token, reference, failure_reason, created_at, updated_at`
 
 var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
@@ -321,7 +372,7 @@ func (s *Service) byKey(ctx context.Context, db ledger.DB, key string) (Payment,
 func scanOne(row pgx.Row) (Payment, error) {
 	var p Payment
 	err := row.Scan(&p.ID, &p.IdempotencyKey, &p.WalletAccountID, &p.BillerID, &p.BillerName, &p.Category,
-		&p.PlanCode, &p.PlanName, &p.Customer, &p.CustomerName, &p.Amount, &p.Status, &p.Token, &p.Reference,
+		&p.PlanCode, &p.PlanName, &p.Customer, &p.CustomerName, &p.Amount, &p.Cashback, &p.Status, &p.Token, &p.Reference,
 		&p.FailureReason, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Payment{}, ErrNotFound

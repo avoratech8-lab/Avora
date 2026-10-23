@@ -79,12 +79,16 @@ func run(log *slog.Logger) error {
 	}
 	kycSvc := kyc.NewService(pool, kyc.Sandbox{})
 	kycSvc.OnVerified = refSvc.Verified
+	billSvc := bills.NewService(pool, bills.Sandbox{}, sys)
+	if os.Getenv("BETTING") == "off" {
+		billSvc.Disable(bills.Betting)
+	}
 	srv := &api.Server{
 		DB:            pool,
 		Rail:          rail,
 		System:        sys,
 		Transfers:     svc,
-		Bills:         bills.NewService(pool, bills.Sandbox{}, sys),
+		Bills:         billSvc,
 		Savings:       savingsSvc,
 		KYC:           kycSvc,
 		Referrals:     refSvc,
