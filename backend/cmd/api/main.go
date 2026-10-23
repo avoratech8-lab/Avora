@@ -19,6 +19,7 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
 	"avora/backend/internal/rails"
@@ -76,6 +77,7 @@ func run(log *slog.Logger) error {
 		Transfers:     svc,
 		Bills:         bills.NewService(pool, bills.Sandbox{}, sys),
 		Savings:       savingsSvc,
+		KYC:           kyc.NewService(pool, kyc.Sandbox{}),
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,

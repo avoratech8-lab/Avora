@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"avora/backend/internal/ledger"
+	"avora/backend/internal/notify"
 	"avora/backend/internal/wallets"
 )
 
@@ -90,6 +91,9 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, sys wallets.System, c Credit
 		Ref:            c.SessionID,
 		Lines:          lines,
 	}); err != nil {
+		return Result{}, err
+	}
+	if err := notify.Add(ctx, tx, w.AccountID, "money_in", notify.Naira(c.Amount-levy)+" received", desc, c.SessionID); err != nil {
 		return Result{}, err
 	}
 	return res, tx.Commit(ctx)

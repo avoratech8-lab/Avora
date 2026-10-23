@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,6 +19,7 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/kyc"
 	"avora/backend/internal/rails"
 	"avora/backend/internal/savings"
 	"avora/backend/internal/testdb"
@@ -70,6 +73,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	}
 	s := &api.Server{
 		Savings: sav,
+		KYC:     kyc.NewService(pool, kyc.Sandbox{}),
 		DB:      pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
@@ -197,7 +201,8 @@ func TestSignUpFundAndTransfer(t *testing.T) {
 		t.Errorf("statement: %d %v", code, st)
 	}
 
-	body["amount"] = 1_000_000_00
+	// Within the daily limit but more than the balance.
+	body["amount"] = 40_000_00
 	if code, _ := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "t3"}); code != http.StatusUnprocessableEntity {
 		t.Errorf("overspend: %d", code)
 	}
@@ -233,8 +238,8 @@ func TestNewDeviceLimit(t *testing.T) {
 	if code, e := newPhone.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "b"}); code != http.StatusForbidden {
 		t.Errorf("over new-device limit: %d %v", code, e)
 	}
-	// The original phone is not limited.
-	body["amount"] = 50_000_00
+	// The original phone has no new-phone cap (only the daily tier limit).
+	body["amount"] = 30_000_00
 	if code, e := first.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "c"}); code != http.StatusOK {
 		t.Errorf("old phone transfer: %d %v", code, e)
 	}
@@ -350,6 +355,119 @@ func TestSavings(t *testing.T) {
 	bola.signIn("08099999999", "570264")
 	if code, _ := bola.call("POST", "/v1/savings/"+id+"/withdraw", map[string]any{"amount": 1}, map[string]string{"Idempotency-Key": "x"}); code != http.StatusNotFound {
 		t.Errorf("other user's pot: %d", code)
+	}
+}
+
+func TestKYCRaisesTheDailyLimit(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 500_000_00)
+
+	code, st := ada.call("GET", "/v1/me/kyc", nil, nil)
+	if code != http.StatusOK || st["tier"] != float64(1) {
+		t.Fatalf("kyc: %d %v", code, st)
+	}
+	body := map[string]any{"bank_code": "058", "account_number": "0123456781", "amount": 50_000_00, "pin": "482915"}
+	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "a"}); code != http.StatusOK {
+		t.Fatalf("up to the limit: %d %v", code, e)
+	}
+	body["amount"] = 100
+	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "b"}); code != http.StatusForbidden ||
+		e["error"].(map[string]any)["code"] != "daily_limit" {
+		t.Fatalf("over tier 1: %d %v", code, e)
+	}
+
+	if code, e := ada.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "123"}, nil); code != http.StatusBadRequest ||
+		e["error"].(map[string]any)["message"] != "BVN must be 11 digits." {
+		t.Errorf("short bvn: %d %v", code, e)
+	}
+	if code, _ := ada.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "22212345670"}, nil); code != http.StatusUnprocessableEntity {
+		t.Errorf("mismatched bvn: %d", code)
+	}
+	code, st = ada.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "22212345678"}, nil)
+	if code != http.StatusOK || st["tier"] != float64(2) || st["bvn_verified"] != true {
+		t.Fatalf("bvn: %d %v", code, st)
+	}
+	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "b"}); code != http.StatusOK {
+		t.Errorf("after tier 2: %d %v", code, e)
+	}
+	if _, st = ada.call("POST", "/v1/me/kyc", map[string]string{"type": "nin", "number": "12345678901"}, nil); st["tier"] != float64(3) {
+		t.Errorf("nin: %v", st)
+	}
+
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	titles := []string{}
+	for _, x := range n["notifications"].([]any) {
+		titles = append(titles, x.(map[string]any)["title"].(string))
+	}
+	want := []string{"You're now on Tier 3", "Transfer delivered", "You're now on Tier 2", "Transfer delivered", "₦499,950.00 received"}
+	if strings.Join(titles, "|") != strings.Join(want, "|") || n["unread"] != float64(5) {
+		t.Errorf("notifications = %v (unread %v)", titles, n["unread"])
+	}
+	if code, _ := ada.call("POST", "/v1/me/notifications/read", nil, nil); code != http.StatusNoContent {
+		t.Errorf("read: %d", code)
+	}
+	if _, n = ada.call("GET", "/v1/me/notifications", nil, nil); n["unread"] != float64(0) {
+		t.Errorf("unread after read = %v", n["unread"])
+	}
+}
+
+func TestChangePINAndDevices(t *testing.T) {
+	srv, sms := newServer(t)
+	old := &client{t: t, srv: srv, sms: sms, device: "old-phone"}
+	old.signIn("08031234567", "482915")
+	thief := &client{t: t, srv: srv, sms: sms, device: "other-phone"}
+	thief.signIn("08031234567", "482915")
+
+	code, ds := old.call("GET", "/v1/me/devices", nil, nil)
+	list := ds["devices"].([]any)
+	if code != http.StatusOK || len(list) != 2 || list[0].(map[string]any)["this_phone"] != true {
+		t.Fatalf("devices: %d %v", code, ds)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin/verify", map[string]string{"pin": "482915"}, nil); code != http.StatusNoContent {
+		t.Errorf("verify pin: %d", code)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin", map[string]string{"old_pin": "000001", "new_pin": "582047"}, nil); code != http.StatusUnauthorized {
+		t.Errorf("wrong old pin: %d", code)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin", map[string]string{"old_pin": "482915", "new_pin": "123456"}, nil); code != http.StatusBadRequest {
+		t.Errorf("weak new pin: %d", code)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin", map[string]string{"old_pin": "482915", "new_pin": "582047"}, nil); code != http.StatusNoContent {
+		t.Fatalf("change pin: %d", code)
+	}
+	// Changing the PIN signs out every other phone.
+	if code, _ := thief.call("GET", "/v1/me/wallet", nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("other phone after PIN change: %d", code)
+	}
+	if code, _ := old.call("GET", "/v1/me/wallet", nil, nil); code != http.StatusOK {
+		t.Errorf("this phone after PIN change: %d", code)
+	}
+
+	thief.signIn("08031234567", "582047")
+	_, ds = old.call("GET", "/v1/me/devices", nil, nil)
+	list = ds["devices"].([]any)
+	thisID := list[0].(map[string]any)["id"].(float64)
+	otherID := list[1].(map[string]any)["id"].(float64)
+	if code, _ := old.call("DELETE", fmt.Sprintf("/v1/me/devices/%d", int(thisID)), nil, nil); code != http.StatusConflict {
+		t.Errorf("remove this phone: %d", code)
+	}
+	if code, _ := old.call("DELETE", fmt.Sprintf("/v1/me/devices/%d", int(otherID)), nil, nil); code != http.StatusNoContent {
+		t.Fatalf("remove other phone: %d", code)
+	}
+	if code, _ := thief.call("GET", "/v1/me/wallet", nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("removed phone: %d", code)
+	}
+	// Someone else can't remove Ada's phones.
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08099999999", "570264")
+	if code, _ := bola.call("DELETE", fmt.Sprintf("/v1/me/devices/%d", int(thisID)), nil, nil); code != http.StatusNotFound {
+		t.Errorf("other user's device: %d", code)
+	}
+	_, n := old.call("GET", "/v1/me/notifications", nil, nil)
+	if len(n["notifications"].([]any)) < 2 {
+		t.Errorf("expected new-phone and PIN notifications: %v", n)
 	}
 }
 
