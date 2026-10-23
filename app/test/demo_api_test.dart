@@ -380,4 +380,44 @@ void main() {
     expect((await api.insights(month: DateTime(2026, 9))).moneyOut, 0);
     expect(await api.setBudget('data', 0), {allSpending: 1000000});
   });
+
+  test('cards: freeze, limit, close; round-ups save the change', () async {
+    final c = await api.createCard('Netflix');
+    expect((c.name, c.frozen, c.last4.length), ('Netflix', false, 4));
+    final d = await api.cardDetails(c.id, '135790');
+    expect(d.number, hasLength(16));
+    expect(d.number.substring(12), c.last4);
+    await expectLater(api.cardDetails(c.id, '000000'), throwsA(isA<ApiException>()));
+
+    final pot = await api.createPot(kind: PotKind.goal, name: 'Change', idempotencyKey: 'pot');
+    await api.setRoundUp(potId: pot.id, step: 10000);
+
+    final ok = await api.testCardPayment(c.id, merchant: 'Netflix', amount: 440000, key: 'a');
+    expect(ok.approved, isTrue);
+    expect((await api.testCardPayment(c.id, merchant: 'Netflix', amount: 440000, key: 'a')).id, ok.id);
+    await api.freezeCard(c.id, true);
+    expect((await api.testCardPayment(c.id, merchant: 'Bolt', amount: 100000, key: 'b')).declineReason, 'card frozen');
+    await api.freezeCard(c.id, false);
+    await api.setCardLimit(c.id, 500000);
+    expect(
+      (await api.testCardPayment(c.id, merchant: 'Jumia', amount: 125050, key: 'c')).declineReason,
+      'over monthly limit',
+    );
+    await api.setCardLimit(c.id, 0);
+    expect((await api.testCardPayment(c.id, merchant: 'Jumia', amount: 125050, key: 'd')).approved, isTrue);
+
+    // ₦4,400 is already round; ₦1,250.50 rounds up by ₦49.50.
+    final (pots, _) = await api.savings();
+    expect(pots.single.balance, 4950);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 440000 - 125050 - 4950);
+    final card = (await api.cards()).cards.single;
+    expect((card.spentThisMonth, card.monthlyLimit), (565050, 0));
+    expect(await api.cardPayments(c.id), hasLength(4));
+    expect((await api.insights()).categories.first.category, 'cards');
+
+    await api.closeCard(c.id, '135790');
+    expect((await api.cards()).cards, isEmpty);
+    await api.setRoundUp(potId: '', step: 10000);
+    expect((await api.roundUp()).on, isFalse);
+  });
 }

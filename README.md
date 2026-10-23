@@ -19,6 +19,8 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - **KYC tiers and limits.** Phone-only accounts are Tier 1 (₦50,000 a day, ₦300,000 balance). A verified BVN or NIN gives Tier 2 (₦200,000 a day, ₦500,000 balance), and both give Tier 3 (₦5,000,000 a day, no balance cap). Transfers and bills since midnight Lagos time count toward the daily limit. `GET/POST /v1/me/kyc`; only the last 4 digits of an ID are kept. The tier amounts follow the published CBN tiers and must be confirmed with the partner bank. Sandbox: any 11-digit number is accepted except ones ending in 0.
 - **Avora tags and free instant transfers.** Each customer can claim a tag like `@ada` (3 to 20 letters, numbers or `_`, starting with a letter; names like `@avora` and `@support` are reserved). Sending to another Avora customer by tag or phone number is one ledger journal between two wallets: free, instant, and it can't get stuck at another bank. The PIN and an `Idempotency-Key` are required, the payment counts toward the daily limit, and the person paid gets a notification. Phone numbers are masked in lookups.
 - **Spending insights and budgets.** `GET /v1/me/insights?month=2026-10` totals a month (Lagos time) from the ledger: money in, spending by category net of refunds, money saved, cashback, daily spending and last month's total. Budgets per category or for all spending (`GET /v1/me/budgets`, `PUT /v1/me/budgets/{category}` with `{"amount"}`, 0 removes) send a notification at 80% and at 100%, once each a month.
+- **Virtual cards (sandbox).** Up to 3 cards per customer that spend straight from the wallet: create, freeze, monthly limit, details behind the PIN, close, and a payment list. `Charge` approves or declines (frozen, over limit, short of money) and notifies the customer either way. Card numbers are never stored; until a card issuer is signed they are derived from the card id on a test Verve range. `POST /v1/sandbox/cards/{id}/charge` stands in for the card scheme; set `SANDBOX=off` in production.
+- **Round-ups.** Save the change from every transfer, bill, Avora payment and card payment into a goal pot, rounding to the next ₦10, ₦100 or ₦1,000 (`GET/PUT /v1/me/roundup`). Skipped when the wallet is short.
 - **Security settings.** Change PIN (`POST /v1/me/pin`, which signs out other phones), check the PIN to unlock the app (`POST /v1/me/pin/verify`), and list or remove phones (`GET /v1/me/devices`, `DELETE /v1/me/devices/{id}`). The app sends `X-Device-Name` at sign-in so phones have names.
 - **Notifications.** Money received, transfers delivered, refunded or under review, bill refunds, new phone sign-ins, PIN changes and tier upgrades: `GET /v1/me/notifications` and `POST /v1/me/notifications/read`.
 - **Referrals.** Each customer gets an invite code (`GET /v1/me/referrals`). A friend can add it within 30 days of joining (`POST /v1/me/referrals`). When that friend first reaches Tier 2, the inviter is paid ₦500 from `system:referral_rewards`, once per friend. The amount is a placeholder until marketing sets a budget.
@@ -69,6 +71,8 @@ The Flutter app covers:
 - **Receipts:** live status for every payment and receipts you can share. They show the session ID for transfers and the token for electricity.
 - **Savings (interest-free):** Goal pots you can add to or take from at any time, and Locked plans (1, 3, 6 or 12 months) that earn a higher expected profit share. Breaking a plan early returns the money but gives back its profit share.
 - **Spending insights:** what you spent this month against last month, day-by-day bars, where it went by category, and monthly budgets (overall or per category) with alerts at 80% and 100%.
+- **Cards:** a free virtual card for paying online, with freeze, monthly limit, number and CVV behind the PIN, payments, and a test payment button in the sandbox.
+- **Round-ups:** turn on from Savings and pick the pot and step.
 - **Activity:** money in and out totals, search and filters, grouped by day.
 - **Security:** fingerprint or face unlock, an app lock (immediately, after 1 or after 5 minutes away) with PIN fallback, fingerprint or face approval for payments, change PIN, and phones signed in. With biometrics on, the PIN is kept in the phone's Keystore/Keychain and only released after a fingerprint or face check, so the server still checks the PIN on every payment.
 - **Limits:** your KYC tier and what it allows, and BVN or NIN verification to move up.
@@ -147,6 +151,13 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | GET | `/v1/me/insights?month=` | A month's money in and out by category |
 | GET | `/v1/me/budgets` | My monthly budgets |
 | PUT | `/v1/me/budgets/{category}` | `{"amount"}`: set a budget (0 removes) |
+| GET/POST | `/v1/cards` | My cards / `{"name"}`: new card |
+| POST | `/v1/cards/{id}/freeze` | `{"frozen"}` |
+| PUT | `/v1/cards/{id}/limit` | `{"amount"}`: monthly limit (0 removes) |
+| POST | `/v1/cards/{id}/details` | `{"pin"}`: number, expiry, CVV |
+| POST | `/v1/cards/{id}/terminate` | `{"pin"}`: close the card |
+| GET | `/v1/cards/{id}/payments` | Recent card payments |
+| GET/PUT | `/v1/me/roundup` | `{"pot_id", "step"}`; empty pot turns it off |
 | GET | `/v1/me/referrals` | My invite code and rewards |
 | POST | `/v1/me/referrals` | `{"code"}`: the code I was invited with |
 | GET | `/v1/help/articles` | Help centre articles |

@@ -13,6 +13,7 @@ import '../ui/widgets.dart';
 (String, IconData, Color) categoryLook(String c) => switch (c) {
   'transfers' => ('Bank transfers', Icons.account_balance_outlined, const Color(0xFF2563EB)),
   'avora' => ('Avora transfers', Icons.bolt_rounded, Brand.green),
+  'cards' => ('Card payments', Icons.credit_card_rounded, const Color(0xFF0F766E)),
   'airtime' => ('Airtime', Icons.phone_android_rounded, const Color(0xFFE8A317)),
   'data' => ('Data', Icons.wifi_rounded, const Color(0xFF7C3AED)),
   'electricity' => ('Electricity', Icons.lightbulb_outline_rounded, const Color(0xFFF97316)),

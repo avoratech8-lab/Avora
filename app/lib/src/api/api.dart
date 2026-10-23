@@ -107,6 +107,24 @@ abstract class AvoraApi {
   /// Sets a monthly budget; 0 removes it.
   Future<Map<String, int>> setBudget(String category, int amount);
 
+  Future<CardList> cards();
+  Future<VirtualCard> createCard(String name);
+  Future<VirtualCard> freezeCard(String id, bool frozen);
+
+  /// Caps what a card can spend each month; 0 removes the cap.
+  Future<VirtualCard> setCardLimit(String id, int amount);
+  Future<CardDetails> cardDetails(String id, String pin);
+  Future<void> closeCard(String id, String pin);
+  Future<List<CardPayment>> cardPayments(String id);
+
+  /// Sandbox only: pays a test merchant with the card, as if online.
+  Future<CardPayment> testCardPayment(String id, {required String merchant, required int amount, required String key});
+
+  Future<RoundUp> roundUp();
+
+  /// Turns round-ups on into a goal pot, or off when [potId] is ''.
+  Future<RoundUp> setRoundUp({required String potId, required int step});
+
   Future<ReferralSummary> referrals();
 
   /// Records the invite code this customer joined with.

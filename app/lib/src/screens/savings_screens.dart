@@ -9,6 +9,7 @@ import '../ids.dart';
 import '../money.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import 'round_up.dart';
 import 'shell_screen.dart';
 
 String percent(int bps) => '${(bps / 100).toStringAsFixed(bps % 100 == 0 ? 0 : 1)}%';
@@ -39,6 +40,7 @@ class SavingsTabState extends State<SavingsTab> {
   List<SavingsPot>? _pots;
   SavingsRates? _rates;
   Object? _error;
+  int _loads = 0; // rebuilds the round-up card, which may have changed elsewhere
 
   @override
   void didChangeDependencies() {
@@ -53,6 +55,7 @@ class SavingsTabState extends State<SavingsTab> {
       setState(() {
         _pots = pots;
         _rates = rates;
+        _loads++;
         _error = null;
       });
     } catch (e) {
@@ -161,6 +164,12 @@ class SavingsTabState extends State<SavingsTab> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 16),
+              RoundUpCard(
+                key: ValueKey(_loads),
+                goals: open.where((p) => p.kind == PotKind.goal).toList(),
+                onChanged: refresh,
               ),
               const SizedBox(height: 24),
               if (open.isNotEmpty) ...[
