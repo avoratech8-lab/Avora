@@ -339,4 +339,45 @@ void main() {
     final pin = await pay('jamb', '1234567891', 0, plan: 'jamb-utme');
     expect(pin.token, hasLength(14));
   });
+
+  test('insights total the month by category, and budgets alert at 80% and 100%', () async {
+    await api.setBudget('data', 180000);
+    await api.setBudget(allSpending, 1000000);
+    await expectLater(api.setBudget('shoes', 100), throwsA(isA<ApiException>()));
+
+    await api.payBill(
+      billerId: 'mtn-data',
+      planCode: 'mtn-2gb-7d',
+      customer: '08031234567',
+      amount: 0,
+      pin: '135790',
+      idempotencyKey: 'd',
+    );
+    await send('0123456781', 900000, key: 't1');
+    await send('0123456780', 50000, key: 't2'); // declined and refunded
+    await api.updateProfile(tag: 'ada');
+    await api.sendToAvora(to: '@tolu', amount: 20000, note: '', pin: '135790', idempotencyKey: 'p');
+    await api.transfer((await api.statement()).firstWhere((l) => l.ref.isNotEmpty && l.kind == 'transfer_hold').ref);
+
+    final i = await api.insights();
+    expect(i.month, DateTime(2026, 10));
+    expect(i.moneyIn, DemoAvoraApi.welcomeCredit + 4500); // welcome credit and ₦45 cashback
+    expect(i.cashback, 4500);
+    expect(
+      [for (final c in i.categories) '${c.category} ${c.amount}/${c.budget} x${c.count}'],
+      ['transfers 900000/0 x2', 'data 150000/180000 x1', 'avora 20000/0 x1'],
+    );
+    expect(i.moneyOut, 1070000);
+    expect(i.days[22], 1070000);
+
+    final (items, _) = await api.notifications();
+    expect(
+      items.map((n) => n.title),
+      containsAll(["You've reached your monthly budget", '80% of your data budget used']),
+    );
+    expect(items.where((n) => n.kind == 'budget'), hasLength(2));
+
+    expect((await api.insights(month: DateTime(2026, 9))).moneyOut, 0);
+    expect(await api.setBudget('data', 0), {allSpending: 1000000});
+  });
 }

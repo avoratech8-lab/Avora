@@ -539,3 +539,78 @@ class P2PTransfer {
   final Person other;
   final DateTime createdAt;
 }
+
+/// Spending categories, in display order, as the backend names them.
+const spendCategories = [
+  'transfers',
+  'avora',
+  'airtime',
+  'data',
+  'electricity',
+  'tv',
+  'internet',
+  'education',
+  'betting',
+  'other',
+];
+
+/// The budget for all spending together.
+const allSpending = 'all';
+
+class SpendCategory {
+  SpendCategory({required this.category, required this.amount, required this.count, required this.budget});
+
+  factory SpendCategory.fromJson(Map<String, dynamic> j) => SpendCategory(
+    category: j['category'] as String,
+    amount: j['amount'] as int,
+    count: j['count'] as int? ?? 0,
+    budget: j['budget'] as int? ?? 0,
+  );
+
+  final String category;
+  final int amount; // kobo, net of refunds
+  final int count;
+  final int budget; // 0 if none
+}
+
+/// One month of money in and out, from the ledger.
+class Insights {
+  Insights({
+    required this.month,
+    required this.moneyIn,
+    required this.moneyOut,
+    required this.saved,
+    required this.cashback,
+    required this.previousOut,
+    required this.budget,
+    required this.categories,
+    required this.days,
+  });
+
+  factory Insights.fromJson(Map<String, dynamic> j) => Insights(
+    month: DateTime.parse('${j['month']}-01'),
+    moneyIn: j['money_in'] as int,
+    moneyOut: j['money_out'] as int,
+    saved: j['saved'] as int? ?? 0,
+    cashback: j['cashback'] as int? ?? 0,
+    previousOut: j['previous_out'] as int? ?? 0,
+    budget: j['budget'] as int? ?? 0,
+    categories: [
+      for (final c in (j['categories'] as List? ?? const [])) SpendCategory.fromJson(c as Map<String, dynamic>),
+    ],
+    days: [for (final d in (j['days'] as List? ?? const [])) d as int],
+  );
+
+  final DateTime month; // the 1st
+  final int moneyIn;
+  final int moneyOut; // spending, not savings
+  final int saved;
+  final int cashback;
+  final int previousOut;
+  final int budget; // all spending, 0 if none
+  final List<SpendCategory> categories; // biggest first
+  final List<int> days; // spending each day
+
+  int budgetFor(String category) =>
+      category == allSpending ? budget : categories.where((c) => c.category == category).firstOrNull?.budget ?? 0;
+}

@@ -588,4 +588,55 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('₦44,100.00'), findsOneWidget);
   });
+
+  testWidgets('see where the money went and set a budget', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await api.payBill(
+      billerId: 'mtn-data',
+      planCode: 'mtn-10gb-30d',
+      customer: '08031234567',
+      amount: 0,
+      pin: '135790',
+      idempotencyKey: 'd',
+    );
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Activity'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: find.byKey(const Key('insights-card')), matching: find.text('₦4,500.00')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('insights-card')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('spent')), findsOneWidget);
+    expect(find.text('₦4,500.00'), findsWidgets);
+    expect(find.byKey(const Key('cat-data')), findsOneWidget);
+
+    // A ₦5,000 monthly budget leaves ₦500.
+    await tester.tap(find.byKey(const Key('budget-all')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('budget-amount')), '5000');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('budget-save')));
+    await tester.pumpAndSettle();
+    expect(find.text('₦500 left'), findsOneWidget);
+
+    // A data budget shows on its row.
+    await tester.tap(find.byKey(const Key('cat-data')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('budget-amount')), '4000');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('budget-save')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('budget ₦4,000'), findsOneWidget);
+    expect(await api.budgets(), {allSpending: 500000, 'data': 400000});
+
+    // Last month was empty.
+    await tester.tap(find.byKey(const Key('month-prev')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Nothing spent'), findsOneWidget);
+  });
 }

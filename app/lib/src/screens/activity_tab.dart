@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../api/models.dart';
+import '../app.dart';
 import '../dates.dart';
 import '../money.dart';
+import '../ui/theme.dart';
 import '../ui/transaction_tile.dart';
+import 'insights_screen.dart';
 import 'open_line.dart';
 import 'shell_screen.dart';
 
@@ -32,9 +36,6 @@ class _ActivityTabState extends State<ActivityTab> {
       return _query.isEmpty || l.description.toLowerCase().contains(_query.toLowerCase());
     }).toList();
 
-    final moneyIn = shell.lines.where((l) => l.amount > 0).fold<int>(0, (a, l) => a + l.amount);
-    final moneyOut = shell.lines.where((l) => l.amount < 0).fold<int>(0, (a, l) => a - l.amount);
-
     final children = <Widget>[];
     String? day;
     for (final l in lines) {
@@ -60,17 +61,7 @@ class _ActivityTabState extends State<ActivityTab> {
           children: [
             Text('Activity', style: theme.textTheme.headlineSmall),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _Total(label: 'Money in', amount: moneyIn, icon: Icons.south_west_rounded),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _Total(label: 'Money out', amount: moneyOut, icon: Icons.north_east_rounded),
-                ),
-              ],
-            ),
+            _MonthCard(key: ValueKey('${shell.lines.length} ${shell.lines.firstOrNull?.ref}')),
             const SizedBox(height: 16),
             TextField(
               decoration: const InputDecoration(hintText: 'Search activity', prefixIcon: Icon(Icons.search_rounded)),
@@ -111,36 +102,107 @@ class _ActivityTabState extends State<ActivityTab> {
   }
 }
 
-class _Total extends StatelessWidget {
-  const _Total({required this.label, required this.amount, required this.icon});
+/// This month's spending at a glance, opening the full insights.
+class _MonthCard extends StatefulWidget {
+  const _MonthCard({super.key});
 
-  final String label;
-  final int amount;
-  final IconData icon;
+  @override
+  State<_MonthCard> createState() => _MonthCardState();
+}
+
+class _MonthCardState extends State<_MonthCard> {
+  Insights? _i;
+  bool _asked = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_asked) return;
+    _asked = true;
+    AppScope.of(context).api.insights().then((i) {
+      if (mounted) setState(() => _i = i);
+    }, onError: (Object _) {});
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final i = _i;
+    final top = i?.categories.where((c) => c.amount > 0).take(3).toList() ?? const [];
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 16, color: theme.colorScheme.primary),
-                const SizedBox(width: 6),
-                Text(label, style: theme.textTheme.bodySmall),
+      child: InkWell(
+        key: const Key('insights-card'),
+        borderRadius: BorderRadius.circular(20),
+        onTap: () async {
+          await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const InsightsScreen()));
+          if (!context.mounted) return;
+          final fresh = await AppScope.of(context).api.insights();
+          if (mounted) setState(() => _i = fresh);
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.insights_rounded, size: 18, color: theme.colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      i == null ? 'This month' : 'Spent in ${formatMonth(i.month).split(' ').first}',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                  Text('Insights', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
+                  Icon(Icons.chevron_right_rounded, size: 18, color: theme.colorScheme.primary),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(i == null ? '…' : formatNaira(i.moneyOut), style: theme.textTheme.headlineSmall),
+              if (i != null && i.budget > 0) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: (i.moneyOut / i.budget).clamp(0, 1).toDouble(),
+                    minHeight: 6,
+                    color: i.moneyOut >= i.budget
+                        ? Brand.danger
+                        : i.moneyOut * 10 >= i.budget * 8
+                        ? Brand.warning
+                        : Brand.green,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'of ${formatNaira(i.budget)} budget',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
               ],
-            ),
-            const SizedBox(height: 6),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(formatNaira(amount), style: theme.textTheme.titleMedium),
-            ),
-          ],
+              if (top.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 6,
+                  children: [
+                    for (final c in top)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.circle, size: 8, color: categoryLook(c.category).$3),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${categoryLook(c.category).$1} ${formatNaira(c.amount).replaceAll('.00', '')}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

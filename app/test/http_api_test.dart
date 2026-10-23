@@ -292,4 +292,36 @@ void main() {
     expect((await api.p2pTransfer('p1')).id, 'p1');
     expect(requests.last.url.path, '/v1/p2p/p1');
   });
+
+  test('insights and budgets', () async {
+    await creds.setToken('tok');
+    final api = apiWith(
+      (r) => switch (r.url.path) {
+        '/v1/me/insights' => json({
+          'month': '2026-09',
+          'money_in': 100,
+          'money_out': 60,
+          'saved': 10,
+          'cashback': 2,
+          'previous_out': 80,
+          'budget': 100,
+          'categories': [
+            {'category': 'data', 'amount': 60, 'count': 2, 'budget': 50},
+          ],
+          'days': [0, 60],
+        }),
+        _ => json({
+          'budgets': {'data': 50, 'all': 100},
+        }),
+      },
+    );
+    final i = await api.insights(month: DateTime(2026, 9));
+    expect(requests.last.url.queryParameters['month'], '2026-09');
+    expect((i.month, i.moneyOut, i.budgetFor('data'), i.budgetFor(allSpending)), (DateTime(2026, 9), 60, 50, 100));
+    await api.insights();
+    expect(requests.last.url.hasQuery, isFalse);
+    expect(await api.setBudget('data', 50), {'data': 50, 'all': 100});
+    expect('${requests.last.method} ${requests.last.url.path}', 'PUT /v1/me/budgets/data');
+    expect(jsonDecode(requests.last.body), {'amount': 50});
+  });
 }

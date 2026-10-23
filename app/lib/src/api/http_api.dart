@@ -276,6 +276,26 @@ class HttpAvoraApi implements AvoraApi {
   Future<P2PTransfer> p2pTransfer(String id) async => P2PTransfer.fromJson(await _call('GET', '/v1/p2p/$id'));
 
   @override
+  Future<Insights> insights({DateTime? month}) async => Insights.fromJson(
+    await _call(
+      'GET',
+      '/v1/me/insights',
+      query: month == null ? null : {'month': '${month.year}-${month.month.toString().padLeft(2, '0')}'},
+    ),
+  );
+
+  @override
+  Future<Map<String, int>> budgets() async => _budgets(await _call('GET', '/v1/me/budgets'));
+
+  @override
+  Future<Map<String, int>> setBudget(String category, int amount) async =>
+      _budgets(await _call('PUT', '/v1/me/budgets/$category', body: {'amount': amount}));
+
+  Map<String, int> _budgets(Map<String, dynamic> j) => {
+    for (final e in (j['budgets'] as Map<String, dynamic>? ?? const {}).entries) e.key: e.value as int,
+  };
+
+  @override
   Future<ReferralSummary> referrals() async => ReferralSummary.fromJson(await _call('GET', '/v1/me/referrals'));
 
   @override
