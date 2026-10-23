@@ -104,6 +104,7 @@ class DemoAvoraApi implements AvoraApi {
         'We added ${formatNaira(welcomeCredit)} of demo money so you can try things out.',
       );
       _users[phone] = u;
+      _askNewcomer(u);
     }
     final token = randomId();
     _tokens[token] = _users[phone]!;
@@ -1130,6 +1131,364 @@ class DemoAvoraApi implements AvoraApi {
 
   String _code(_DemoUser u) => 'AVDEMO${u.id.toString().padLeft(2, '0')}';
 
+  // Scheduled payments. In the demo a schedule runs when the list is opened
+  // after its date, or at once with "Run now".
+
+  @override
+  Future<ScheduleList> schedules() async {
+    final u = _me;
+    for (final sc in u.schedules.values.toList()) {
+      if (sc.active && !sc.nextRun.isAfter(_now())) await _runSchedule(u, sc);
+    }
+    final list = u.schedules.values.where((s) => s.status != ScheduleStatus.cancelled).toList()
+      ..sort((a, b) => a.done != b.done ? (a.done ? 1 : -1) : a.nextRun.compareTo(b.nextRun));
+    return ScheduleList(schedules: list, sandbox: true);
+  }
+
+  @override
+  Future<Schedule> createSchedule({
+    required ScheduleKind kind,
+    required String name,
+    required int amount,
+    required Frequency frequency,
+    required DateTime startsAt,
+    required ScheduleTarget target,
+    required String pin,
+  }) async {
+    final u = _me;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    final now = _now();
+    if (startsAt.isBefore(now.subtract(const Duration(minutes: 5))) ||
+        startsAt.isAfter(now.add(const Duration(days: 366)))) {
+      throw ApiException('invalid_request', 'Pick a start date from today to a year ahead.', status: 400);
+    }
+    if (u.schedules.values.where((s) => s.active || s.paused).length >= 20) {
+      throw ApiException('invalid_request', 'You can have up to 20 scheduled payments.', status: 400);
+    }
+    final t = switch (kind) {
+      ScheduleKind.transfer => ScheduleTarget(
+        bankCode: target.bankCode,
+        accountNumber: target.accountNumber,
+        accountName: await nameEnquiry(bankCode: target.bankCode, accountNumber: target.accountNumber),
+      ),
+      ScheduleKind.avora => () {
+        final p = _find(target.to);
+        return ScheduleTarget(to: p.tag.isNotEmpty ? '@${p.tag}' : target.to, accountName: _person(p).name);
+      }(),
+      ScheduleKind.bill => ScheduleTarget(
+        billerId: target.billerId,
+        planCode: target.planCode,
+        customer: target.customer,
+        accountName: await validateBillCustomer(billerId: target.billerId, customer: target.customer),
+      ),
+      ScheduleKind.savings => () {
+        final p = _ownPot(u, target.potId);
+        if (p.kind != PotKind.goal) {
+          throw ApiException('invalid_request', 'Scheduled saving goes into an open goal pot.', status: 400);
+        }
+        return ScheduleTarget(potId: p.id, accountName: p.name);
+      }(),
+    };
+    if (kind == ScheduleKind.bill) {
+      final b = _biller(target.billerId);
+      if (b.hasPlans) amount = b.plans.firstWhere((p) => p.code == target.planCode).amount;
+    }
+    name = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).join(' ');
+    if (name.isEmpty) name = t.accountName.isEmpty ? kind.label : t.accountName;
+    if (name.length > 40) throw ApiException('invalid_request', 'Give it a name of up to 40 characters.', status: 400);
+    if (amount <= 0) throw ApiException('invalid_request', 'Amount must be more than zero.', status: 400);
+    final sc = Schedule(
+      id: randomId(),
+      kind: kind,
+      name: name,
+      amount: amount,
+      frequency: frequency,
+      startsAt: startsAt,
+      nextRun: startsAt,
+      runs: 0,
+      status: ScheduleStatus.active,
+      target: t,
+    );
+    return u.schedules[sc.id] = sc;
+  }
+
+  Schedule _schedule(_DemoUser u, String id) {
+    final sc = u.schedules[id];
+    if (sc == null || sc.status == ScheduleStatus.cancelled) {
+      throw ApiException('schedule_not_found', 'That scheduled payment no longer exists.', status: 404);
+    }
+    return sc;
+  }
+
+  @override
+  Future<Schedule> pauseSchedule(String id, bool paused) async {
+    final u = _me;
+    final sc = _schedule(u, id);
+    if (sc.done) throw ApiException('invalid_request', 'This payment has finished.', status: 400);
+    if (!paused && sc.paused) {
+      // Resuming skips the runs that were missed while paused.
+      var n = sc.runs;
+      var next = sc.nextRun;
+      while (sc.frequency != Frequency.once && next.isBefore(_now())) {
+        next = sc.frequency.at(sc.startsAt, ++n);
+      }
+      return u.schedules[id] = sc.copyWith(status: ScheduleStatus.active, nextRun: next);
+    }
+    return u.schedules[id] = sc.copyWith(status: paused ? ScheduleStatus.paused : ScheduleStatus.active);
+  }
+
+  @override
+  Future<void> cancelSchedule(String id) async {
+    final u = _me;
+    u.schedules[id] = _schedule(u, id).copyWith(status: ScheduleStatus.cancelled);
+  }
+
+  @override
+  Future<Schedule> runScheduleNow(String id) async {
+    final u = _me;
+    final sc = _schedule(u, id);
+    if (!sc.active) throw ApiException('invalid_request', 'Resume it first.', status: 400);
+    return _runSchedule(u, sc);
+  }
+
+  Future<Schedule> _runSchedule(_DemoUser u, Schedule sc) async {
+    final key = 'schedule:${sc.id}:${sc.runs}';
+    final t = sc.target;
+    String? failure;
+    try {
+      switch (sc.kind) {
+        case ScheduleKind.transfer:
+          await send(
+            bankCode: t.bankCode,
+            accountNumber: t.accountNumber,
+            amount: sc.amount,
+            narration: sc.name,
+            pin: u.pin,
+            idempotencyKey: key,
+          );
+        case ScheduleKind.avora:
+          await sendToAvora(to: t.to, amount: sc.amount, note: sc.name, pin: u.pin, idempotencyKey: key);
+        case ScheduleKind.bill:
+          final p = await payBill(
+            billerId: t.billerId,
+            planCode: t.planCode.isEmpty ? null : t.planCode,
+            customer: t.customer,
+            amount: sc.amount,
+            pin: u.pin,
+            idempotencyKey: key,
+          );
+          if (p.status == BillStatus.refunded) failure = 'The biller declined it, so the money came back.';
+        case ScheduleKind.savings:
+          await depositToPot(t.potId, sc.amount, idempotencyKey: key);
+      }
+    } on ApiException catch (e) {
+      failure = switch (e.code) {
+        'insufficient_funds' => 'Your balance was too low.',
+        'savings_closed' || 'not_found' => 'That savings pot is closed.',
+        'person_not_found' => "That Avora customer can't be found any more.",
+        _ => e.message,
+      };
+    }
+    final now = _now();
+    var n = sc.runs + 1;
+    var next = sc.frequency.at(sc.startsAt, n);
+    while (sc.frequency != Frequency.once && !next.isAfter(now)) {
+      next = sc.frequency.at(sc.startsAt, ++n);
+    }
+    final ran = u.schedules[sc.id] = sc.copyWith(
+      runs: sc.runs + 1,
+      nextRun: next,
+      status: sc.frequency == Frequency.once ? ScheduleStatus.done : null,
+      lastRunAt: now,
+      lastOk: failure == null,
+      lastMessage: failure ?? 'Sent',
+    );
+    if (failure == null) {
+      _notify(u, 'schedule', 'Scheduled: ${formatNaira(sc.amount)} for ${sc.name}', 'Paid as planned.', sc.id);
+    } else {
+      _notify(
+        u,
+        'schedule',
+        "${sc.name} didn't go",
+        sc.frequency == Frequency.once
+            ? '$failure You can pay it from the app.'
+            : "$failure We'll try again at the next date.",
+        sc.id,
+      );
+    }
+    return ran;
+  }
+
+  // Split bills. Everyone in the demo shares one list; demo people pay
+  // what they're asked a few seconds later.
+
+  final _splits = <String, _DemoSplit>{};
+
+  void _askNewcomer(_DemoUser u) {
+    final tolu = _users[demoPeople.first.$1]!;
+    final id = randomId();
+    _splits[id] = _DemoSplit(id, tolu, 'Suya night', 750000, [_DemoShare(u, 250000)], _now());
+    _notify(
+      u,
+      'split',
+      '${_who(tolu)} asked you for ${formatNaira(250000)}',
+      'For Suya night. Open it to pay or decline.',
+      id,
+    );
+  }
+
+  bool _isDemoPerson(_DemoUser u) => demoPeople.any((p) => p.$1 == u.phone);
+
+  /// Demo people pay their share once it has waited [pendingFor].
+  void _settleDemoShares(_DemoSplit sp) {
+    for (final x in sp.shares) {
+      if (x.status != ShareStatus.pending || !_isDemoPerson(x.user)) continue;
+      if (_now().difference(sp.createdAt) < pendingFor) continue;
+      _payShare(sp, x);
+    }
+  }
+
+  void _payShare(_DemoSplit sp, _DemoShare x) {
+    final id = randomId();
+    final at = _now();
+    final from = x.user;
+    final to = sp.creator;
+    from.balance -= x.amount;
+    to.balance += x.amount;
+    from.lines.add(StatementLine(kind: 'p2p_out', description: 'To ${_who(to)}', ref: id, amount: -x.amount, at: at));
+    to.lines.add(StatementLine(kind: 'p2p_in', description: 'From ${_who(from)}', ref: id, amount: x.amount, at: at));
+    from.p2p[id] = P2PTransfer(
+      id: id,
+      outgoing: true,
+      amount: x.amount,
+      note: sp.title,
+      other: _person(to),
+      createdAt: at,
+    );
+    to.p2p[id] = P2PTransfer(
+      id: id,
+      outgoing: false,
+      amount: x.amount,
+      note: sp.title,
+      other: _person(from),
+      createdAt: at,
+    );
+    x.status = ShareStatus.paid;
+    _notify(to, 'split', '${_who(from)} paid ${formatNaira(x.amount)}', 'For ${sp.title}.', sp.id);
+  }
+
+  SplitBill _splitFor(_DemoUser viewer, _DemoSplit sp) => SplitBill(
+    id: sp.id,
+    title: sp.title,
+    total: sp.total,
+    creator: _who(sp.creator),
+    mine: sp.creator == viewer,
+    shares: [
+      for (final x in [...sp.shares]..sort((a, b) => b.amount.compareTo(a.amount)))
+        SplitShare(name: x.user.name, tag: x.user.tag, amount: x.amount, status: x.status, you: x.user == viewer),
+    ],
+    collected: sp.shares.where((x) => x.status == ShareStatus.paid).fold(0, (a, x) => a + x.amount),
+    createdAt: sp.createdAt,
+  );
+
+  _DemoSplit _visibleSplit(_DemoUser u, String id) {
+    final sp = _splits[id];
+    if (sp == null || (sp.creator != u && !sp.shares.any((x) => x.user == u))) {
+      throw ApiException('split_not_found', 'That split no longer exists.', status: 404);
+    }
+    _settleDemoShares(sp);
+    return sp;
+  }
+
+  @override
+  Future<List<SplitBill>> splits() async {
+    final u = _me;
+    final mine = _splits.values.where((sp) => sp.creator == u || sp.shares.any((x) => x.user == u)).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return [for (final sp in mine) _splitFor(u, _visibleSplit(u, sp.id))];
+  }
+
+  @override
+  Future<SplitBill> split(String id) async {
+    final u = _me;
+    return _splitFor(u, _visibleSplit(u, id));
+  }
+
+  @override
+  Future<SplitBill> createSplit({
+    required String title,
+    required int total,
+    required List<(String, int)> people,
+  }) async {
+    final u = _me;
+    title = title.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).join(' ');
+    if (title.isEmpty || title.length > 40) {
+      throw ApiException('invalid_request', "What's it for? (up to 40 characters)", status: 400);
+    }
+    if (people.isEmpty || people.length > 10) {
+      throw ApiException('invalid_request', 'Ask 1 to 10 people.', status: 400);
+    }
+    final shares = <_DemoShare>[];
+    for (final (to, amount) in people) {
+      final other = _find(to);
+      if (amount <= 0) throw ApiException('invalid_request', 'Every share must be more than ₦0.', status: 400);
+      if (shares.any((x) => x.user == other)) {
+        throw ApiException('invalid_request', 'Each person can be asked once.', status: 400);
+      }
+      shares.add(_DemoShare(other, amount));
+    }
+    if (total <= 0 || shares.fold(0, (a, x) => a + x.amount) > total) {
+      throw ApiException('invalid_request', 'The shares add up to more than the bill.', status: 400);
+    }
+    final id = randomId();
+    final sp = _splits[id] = _DemoSplit(id, u, title, total, shares, _now());
+    for (final x in shares) {
+      _notify(
+        x.user,
+        'split',
+        '${_who(u)} asked you for ${formatNaira(x.amount)}',
+        'For $title. Open it to pay or decline.',
+        id,
+      );
+    }
+    return _splitFor(u, sp);
+  }
+
+  _DemoShare _myShare(_DemoUser u, String id) {
+    final sp = _visibleSplit(u, id);
+    final x = sp.shares.where((x) => x.user == u).firstOrNull;
+    if (x == null) throw ApiException('split_not_found', 'That split no longer exists.', status: 404);
+    if (x.status != ShareStatus.pending) {
+      throw ApiException('split_settled', "You've already answered this one.", status: 409);
+    }
+    return x;
+  }
+
+  @override
+  Future<SplitBill> paySplit(String id, String pin) async {
+    final u = _me;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    final x = _myShare(u, id);
+    final sp = _splits[id]!;
+    final to = sp.creator.tag.isNotEmpty ? '@${sp.creator.tag}' : sp.creator.phone;
+    final t = await sendToAvora(to: to, amount: x.amount, note: sp.title, pin: pin, idempotencyKey: 'split:$id');
+    x.status = ShareStatus.paid;
+    // sendToAvora told the creator about the money; say what it was for.
+    sp.creator.notifications.removeLast();
+    _notify(sp.creator, 'split', '${_who(u)} paid ${formatNaira(t.amount)}', 'For ${sp.title}.', id);
+    return _splitFor(u, sp);
+  }
+
+  @override
+  Future<SplitBill> declineSplit(String id) async {
+    final u = _me;
+    final x = _myShare(u, id);
+    final sp = _splits[id]!;
+    x.status = ShareStatus.declined;
+    _notify(sp.creator, 'split', '${_who(u)} declined ${formatNaira(x.amount)}', 'For ${sp.title}.', id);
+    return _splitFor(u, sp);
+  }
+
   @override
   Future<ReferralSummary> referrals() async {
     final u = _me;
@@ -1246,6 +1605,26 @@ class _DemoUser {
   final cardPaymentKeys = <String, CardPayment>{};
   var roundUp = const RoundUp(potId: '', step: 10000);
   final budgetAlerts = <String>{}; // "2026-10 data 80"
+  final schedules = <String, Schedule>{};
+}
+
+class _DemoShare {
+  _DemoShare(this.user, this.amount);
+
+  final _DemoUser user;
+  final int amount;
+  ShareStatus status = ShareStatus.pending;
+}
+
+class _DemoSplit {
+  _DemoSplit(this.id, this.creator, this.title, this.total, this.shares, this.createdAt);
+
+  final String id;
+  final _DemoUser creator;
+  final String title;
+  final int total;
+  final List<_DemoShare> shares;
+  final DateTime createdAt;
 }
 
 /// How a bill payment reads on the statement; the backend uses the same words.

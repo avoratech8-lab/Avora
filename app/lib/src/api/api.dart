@@ -125,6 +125,36 @@ abstract class AvoraApi {
   /// Turns round-ups on into a goal pot, or off when [potId] is ''.
   Future<RoundUp> setRoundUp({required String potId, required int step});
 
+  Future<ScheduleList> schedules();
+
+  /// Sets up a payment; the payee is checked now, with the PIN, so each run
+  /// goes ahead without asking.
+  Future<Schedule> createSchedule({
+    required ScheduleKind kind,
+    required String name,
+    required int amount,
+    required Frequency frequency,
+    required DateTime startsAt,
+    required ScheduleTarget target,
+    required String pin,
+  });
+  Future<Schedule> pauseSchedule(String id, bool paused);
+  Future<void> cancelSchedule(String id);
+
+  /// Sandbox only: runs a schedule now, as if its date had come.
+  Future<Schedule> runScheduleNow(String id);
+
+  Future<List<SplitBill>> splits();
+  Future<SplitBill> split(String id);
+
+  /// Asks each person in [people] (@tag or phone, and their share) to chip
+  /// in for a bill of [total].
+  Future<SplitBill> createSplit({required String title, required int total, required List<(String, int)> people});
+
+  /// Pays the viewer's share to whoever asked.
+  Future<SplitBill> paySplit(String id, String pin);
+  Future<SplitBill> declineSplit(String id);
+
   Future<ReferralSummary> referrals();
 
   /// Records the invite code this customer joined with.

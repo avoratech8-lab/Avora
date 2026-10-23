@@ -24,7 +24,7 @@ func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"schedules": list})
+	writeJSON(w, http.StatusOK, map[string]any{"schedules": list, "sandbox": s.Sandbox})
 }
 
 // createSchedule checks the payee now, with the PIN, so each run can go

@@ -8,8 +8,10 @@ import 'help_screens.dart';
 import 'profile_screen.dart';
 import 'invite_screen.dart';
 import 'limits_screen.dart';
+import 'schedule_screens.dart';
 import 'security_screens.dart';
 import 'shell_screen.dart';
+import 'split_screens.dart';
 
 /// Account, security and help.
 class ProfileTab extends StatelessWidget {
@@ -142,6 +144,15 @@ class ProfileTab extends StatelessWidget {
               () => go(const InviteScreen()),
               key: const Key('invite'),
             ),
+          ]),
+          _Section('Money tools', [
+            _Item(
+              Icons.event_repeat_rounded,
+              'Scheduled payments',
+              () => go(const SchedulesScreen()),
+              key: const Key('me-schedules'),
+            ),
+            _Item(Icons.call_split_rounded, 'Split bills', () => go(const SplitsScreen()), key: const Key('me-splits')),
           ]),
           _Section('Security', [
             _Item(
