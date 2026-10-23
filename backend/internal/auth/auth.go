@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
+	"avora/backend/internal/notify"
 	"avora/backend/internal/wallets"
 )
 
@@ -164,6 +165,7 @@ type VerifyRequest struct {
 	ChallengeID string
 	Code        string
 	DeviceID    string
+	DeviceName  string // e.g. "Samsung Galaxy A14"; shown on the Devices screen
 	PIN         string // sets the PIN for a new user, checks it for an existing one
 }
 
@@ -199,9 +201,16 @@ func (s *Service) Verify(ctx context.Context, req VerifyRequest) (Session, error
 		return Session{}, err
 	}
 
-	newDevice, err := s.bindDevice(ctx, userID, req.DeviceID)
+	newDevice, err := s.bindDevice(ctx, userID, req.DeviceID, deviceName(req.DeviceName))
 	if err != nil {
 		return Session{}, err
+	}
+	if newDevice && !newUser {
+		if err := notify.Add(ctx, s.db, walletID, "security", "New phone signed in",
+			fmt.Sprintf("%s signed in to your account. If this wasn't you, remove it under Me → Devices and change your PIN.",
+				deviceName(req.DeviceName)), ""); err != nil {
+			return Session{}, err
+		}
 	}
 	token, err := s.createSession(ctx, userID, req.DeviceID)
 	if err != nil {
@@ -322,11 +331,22 @@ func (s *Service) CheckPIN(ctx context.Context, userID int64, pin string) error 
 	return err
 }
 
-func (s *Service) bindDevice(ctx context.Context, userID int64, deviceID string) (bool, error) {
+func deviceName(n string) string {
+	n = strings.TrimSpace(n)
+	if n == "" {
+		return "A phone"
+	}
+	if len(n) > 60 {
+		n = n[:60]
+	}
+	return n
+}
+
+func (s *Service) bindDevice(ctx context.Context, userID int64, deviceID, name string) (bool, error) {
 	tag, err := s.db.Exec(ctx, `
-		insert into devices (user_id, device_id, first_device, bound_at)
-		values ($1, $2, not exists (select 1 from devices where user_id = $1), $3)
-		on conflict (user_id, device_id) do nothing`, userID, deviceID, s.now())
+		insert into devices (user_id, device_id, first_device, bound_at, name)
+		values ($1, $2, not exists (select 1 from devices where user_id = $1), $3, $4)
+		on conflict (user_id, device_id) do nothing`, userID, deviceID, s.now(), name)
 	if err != nil {
 		return false, err
 	}
@@ -394,3 +414,98 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 }
 
 func (s *Service) Config() Config { return s.cfg }
+
+var ErrSamePIN = errors.New("auth: the new PIN must be different from the old one")
+
+// ChangePIN checks the old PIN, sets a new one and signs out every other
+// phone, so whoever might have learnt the old PIN is locked out.
+func (s *Service) ChangePIN(ctx context.Context, p Principal, oldPIN, newPIN string) error {
+	if err := s.CheckPIN(ctx, p.UserID, oldPIN); err != nil {
+		return err
+	}
+	if !ValidPIN(newPIN) {
+		return ErrWeakPIN
+	}
+	if newPIN == oldPIN {
+		return ErrSamePIN
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPIN), s.cfg.BcryptCost)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `update users set pin_hash = $2 where id = $1`, p.UserID, string(hash)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `delete from sessions where user_id = $1 and device_id <> $2`, p.UserID, p.DeviceID); err != nil {
+		return err
+	}
+	if err := notify.Add(ctx, tx, p.WalletID, "security", "PIN changed",
+		"Your PIN was changed and your other phones were signed out. If this wasn't you, contact support now.", ""); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+type Device struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	BoundAt   time.Time `json:"bound_at"`
+	ThisPhone bool      `json:"this_phone"`
+	SignedIn  bool      `json:"signed_in"`
+}
+
+// Devices lists the phones bound to the user, this one first.
+func (s *Service) Devices(ctx context.Context, p Principal) ([]Device, error) {
+	rows, err := s.db.Query(ctx, `
+		select d.id, d.name, d.bound_at, d.device_id = $2,
+			exists (select 1 from sessions x where x.user_id = d.user_id and x.device_id = d.device_id and x.expires_at > $3)
+		from devices d where d.user_id = $1
+		order by d.device_id = $2 desc, d.bound_at desc`, p.UserID, p.DeviceID, s.now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Device{}
+	for rows.Next() {
+		var d Device
+		if err := rows.Scan(&d.ID, &d.Name, &d.BoundAt, &d.ThisPhone, &d.SignedIn); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+var ErrThisDevice = errors.New("auth: use Sign out to remove this phone")
+
+// RemoveDevice signs a phone out and unbinds it. If it signs in again it
+// counts as a new phone, with the new-phone limit.
+func (s *Service) RemoveDevice(ctx context.Context, p Principal, id int64) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var deviceID string
+	err = tx.QueryRow(ctx, `delete from devices where id = $1 and user_id = $2 returning device_id`, id, p.UserID).Scan(&deviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoSuchDevice
+	}
+	if err != nil {
+		return err
+	}
+	if deviceID == p.DeviceID {
+		return ErrThisDevice
+	}
+	if _, err := tx.Exec(ctx, `delete from sessions where user_id = $1 and device_id = $2`, p.UserID, deviceID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+var ErrNoSuchDevice = errors.New("auth: no such device")

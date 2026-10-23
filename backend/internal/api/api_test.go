@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,8 +19,11 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/kyc"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/support"
 	"avora/backend/internal/testdb"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
@@ -68,9 +73,18 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ref, err := referrals.NewService(ctx, pool, referrals.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kyc.NewService(pool, kyc.Sandbox{})
+	k.OnVerified = ref.Verified
 	s := &api.Server{
-		Savings: sav,
-		DB:      pool, Rail: rail, System: sys,
+		Savings:   sav,
+		KYC:       k,
+		Referrals: ref,
+		Support:   support.NewService(pool),
+		DB:        pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
 		Auth: auth.NewService(pool, sms, acfg, func(context.Context, string) (string, error) {
@@ -197,7 +211,8 @@ func TestSignUpFundAndTransfer(t *testing.T) {
 		t.Errorf("statement: %d %v", code, st)
 	}
 
-	body["amount"] = 1_000_000_00
+	// Within the daily limit but more than the balance.
+	body["amount"] = 40_000_00
 	if code, _ := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "t3"}); code != http.StatusUnprocessableEntity {
 		t.Errorf("overspend: %d", code)
 	}
@@ -233,8 +248,8 @@ func TestNewDeviceLimit(t *testing.T) {
 	if code, e := newPhone.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "b"}); code != http.StatusForbidden {
 		t.Errorf("over new-device limit: %d %v", code, e)
 	}
-	// The original phone is not limited.
-	body["amount"] = 50_000_00
+	// The original phone has no new-phone cap (only the daily tier limit).
+	body["amount"] = 30_000_00
 	if code, e := first.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "c"}); code != http.StatusOK {
 		t.Errorf("old phone transfer: %d %v", code, e)
 	}
@@ -353,6 +368,119 @@ func TestSavings(t *testing.T) {
 	}
 }
 
+func TestKYCRaisesTheDailyLimit(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 500_000_00)
+
+	code, st := ada.call("GET", "/v1/me/kyc", nil, nil)
+	if code != http.StatusOK || st["tier"] != float64(1) {
+		t.Fatalf("kyc: %d %v", code, st)
+	}
+	body := map[string]any{"bank_code": "058", "account_number": "0123456781", "amount": 50_000_00, "pin": "482915"}
+	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "a"}); code != http.StatusOK {
+		t.Fatalf("up to the limit: %d %v", code, e)
+	}
+	body["amount"] = 100
+	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "b"}); code != http.StatusForbidden ||
+		e["error"].(map[string]any)["code"] != "daily_limit" {
+		t.Fatalf("over tier 1: %d %v", code, e)
+	}
+
+	if code, e := ada.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "123"}, nil); code != http.StatusBadRequest ||
+		e["error"].(map[string]any)["message"] != "BVN must be 11 digits." {
+		t.Errorf("short bvn: %d %v", code, e)
+	}
+	if code, _ := ada.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "22212345670"}, nil); code != http.StatusUnprocessableEntity {
+		t.Errorf("mismatched bvn: %d", code)
+	}
+	code, st = ada.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "22212345678"}, nil)
+	if code != http.StatusOK || st["tier"] != float64(2) || st["bvn_verified"] != true {
+		t.Fatalf("bvn: %d %v", code, st)
+	}
+	if code, e := ada.call("POST", "/v1/transfers", body, map[string]string{"Idempotency-Key": "b"}); code != http.StatusOK {
+		t.Errorf("after tier 2: %d %v", code, e)
+	}
+	if _, st = ada.call("POST", "/v1/me/kyc", map[string]string{"type": "nin", "number": "12345678901"}, nil); st["tier"] != float64(3) {
+		t.Errorf("nin: %v", st)
+	}
+
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	titles := []string{}
+	for _, x := range n["notifications"].([]any) {
+		titles = append(titles, x.(map[string]any)["title"].(string))
+	}
+	want := []string{"You're now on Tier 3", "Transfer delivered", "You're now on Tier 2", "Transfer delivered", "₦499,950.00 received"}
+	if strings.Join(titles, "|") != strings.Join(want, "|") || n["unread"] != float64(5) {
+		t.Errorf("notifications = %v (unread %v)", titles, n["unread"])
+	}
+	if code, _ := ada.call("POST", "/v1/me/notifications/read", nil, nil); code != http.StatusNoContent {
+		t.Errorf("read: %d", code)
+	}
+	if _, n = ada.call("GET", "/v1/me/notifications", nil, nil); n["unread"] != float64(0) {
+		t.Errorf("unread after read = %v", n["unread"])
+	}
+}
+
+func TestChangePINAndDevices(t *testing.T) {
+	srv, sms := newServer(t)
+	old := &client{t: t, srv: srv, sms: sms, device: "old-phone"}
+	old.signIn("08031234567", "482915")
+	thief := &client{t: t, srv: srv, sms: sms, device: "other-phone"}
+	thief.signIn("08031234567", "482915")
+
+	code, ds := old.call("GET", "/v1/me/devices", nil, nil)
+	list := ds["devices"].([]any)
+	if code != http.StatusOK || len(list) != 2 || list[0].(map[string]any)["this_phone"] != true {
+		t.Fatalf("devices: %d %v", code, ds)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin/verify", map[string]string{"pin": "482915"}, nil); code != http.StatusNoContent {
+		t.Errorf("verify pin: %d", code)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin", map[string]string{"old_pin": "000001", "new_pin": "582047"}, nil); code != http.StatusUnauthorized {
+		t.Errorf("wrong old pin: %d", code)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin", map[string]string{"old_pin": "482915", "new_pin": "123456"}, nil); code != http.StatusBadRequest {
+		t.Errorf("weak new pin: %d", code)
+	}
+	if code, _ := old.call("POST", "/v1/me/pin", map[string]string{"old_pin": "482915", "new_pin": "582047"}, nil); code != http.StatusNoContent {
+		t.Fatalf("change pin: %d", code)
+	}
+	// Changing the PIN signs out every other phone.
+	if code, _ := thief.call("GET", "/v1/me/wallet", nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("other phone after PIN change: %d", code)
+	}
+	if code, _ := old.call("GET", "/v1/me/wallet", nil, nil); code != http.StatusOK {
+		t.Errorf("this phone after PIN change: %d", code)
+	}
+
+	thief.signIn("08031234567", "582047")
+	_, ds = old.call("GET", "/v1/me/devices", nil, nil)
+	list = ds["devices"].([]any)
+	thisID := list[0].(map[string]any)["id"].(float64)
+	otherID := list[1].(map[string]any)["id"].(float64)
+	if code, _ := old.call("DELETE", fmt.Sprintf("/v1/me/devices/%d", int(thisID)), nil, nil); code != http.StatusConflict {
+		t.Errorf("remove this phone: %d", code)
+	}
+	if code, _ := old.call("DELETE", fmt.Sprintf("/v1/me/devices/%d", int(otherID)), nil, nil); code != http.StatusNoContent {
+		t.Fatalf("remove other phone: %d", code)
+	}
+	if code, _ := thief.call("GET", "/v1/me/wallet", nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("removed phone: %d", code)
+	}
+	// Someone else can't remove Ada's phones.
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08099999999", "570264")
+	if code, _ := bola.call("DELETE", fmt.Sprintf("/v1/me/devices/%d", int(thisID)), nil, nil); code != http.StatusNotFound {
+		t.Errorf("other user's device: %d", code)
+	}
+	_, n := old.call("GET", "/v1/me/notifications", nil, nil)
+	if len(n["notifications"].([]any)) < 2 {
+		t.Errorf("expected new-phone and PIN notifications: %v", n)
+	}
+}
+
 func TestOpsRoutesNeedKey(t *testing.T) {
 	srv, _ := newServer(t)
 	c := &client{t: t, srv: srv}
@@ -362,5 +490,91 @@ func TestOpsRoutesNeedKey(t *testing.T) {
 	}
 	if code, _ := c.call("POST", path, map[string]string{"outcome": "refunded"}, map[string]string{"X-Ops-Key": opsKey}); code != http.StatusNotFound {
 		t.Errorf("with key: %d", code)
+	}
+}
+
+func TestReferralPaysWhenTheFriendVerifies(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	_, sum := ada.call("GET", "/v1/me/referrals", nil, nil)
+	code, _ := sum["code"].(string)
+	if len(code) != 8 || !strings.HasPrefix(code, "AV") {
+		t.Fatalf("code = %q", code)
+	}
+	if _, again := ada.call("GET", "/v1/me/referrals", nil, nil); again["code"] != code {
+		t.Fatalf("code changed: %v", again["code"])
+	}
+	if c, e := ada.call("POST", "/v1/me/referrals", map[string]string{"code": code}, nil); c != http.StatusBadRequest {
+		t.Errorf("own code: %d %v", c, e)
+	}
+
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08021234567", "593816")
+	if c, _ := bola.call("POST", "/v1/me/referrals", map[string]string{"code": "AVNOPE22"}, nil); c != http.StatusNotFound {
+		t.Errorf("unknown code: %d", c)
+	}
+	if c, e := bola.call("POST", "/v1/me/referrals", map[string]string{"code": strings.ToLower(code)}, nil); c != http.StatusOK ||
+		e["joined_with"] != code || e["can_add_code"] != false {
+		t.Fatalf("join: %d %v", c, e)
+	}
+	if c, _ := bola.call("POST", "/v1/me/referrals", map[string]string{"code": code}, nil); c != http.StatusConflict {
+		t.Errorf("second join: %d", c)
+	}
+	if _, sum = ada.call("GET", "/v1/me/referrals", nil, nil); sum["invited"] != float64(1) || sum["earned"] != float64(0) {
+		t.Fatalf("before verify: %v", sum)
+	}
+
+	// Verifying twice (BVN then NIN) pays once.
+	bola.call("POST", "/v1/me/kyc", map[string]string{"type": "bvn", "number": "22212345678"}, nil)
+	bola.call("POST", "/v1/me/kyc", map[string]string{"type": "nin", "number": "12345678901"}, nil)
+	if _, sum = ada.call("GET", "/v1/me/referrals", nil, nil); sum["rewarded"] != float64(1) || sum["earned"] != float64(500_00) {
+		t.Fatalf("after verify: %v", sum)
+	}
+	if _, w := ada.call("GET", "/v1/me/wallet", nil, nil); w["balance"] != float64(500_00) {
+		t.Errorf("balance = %v", w["balance"])
+	}
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["title"] != "₦500.00 referral reward" {
+		t.Errorf("notification = %v", first)
+	}
+}
+
+func TestSupportChatBotAndAgent(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+
+	if c, a := ada.call("GET", "/v1/help/articles", nil, nil); c != http.StatusOK || len(a["articles"].([]any)) < 5 {
+		t.Fatalf("articles: %d", c)
+	}
+	_, m := ada.call("POST", "/v1/support/messages", map[string]string{"body": "My transfer hasn't arrived"}, nil)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 2 || !strings.HasPrefix(msgs[1].(map[string]any)["body"].(string), "My transfer hasn't arrived") {
+		t.Fatalf("bot answer: %v", msgs)
+	}
+	_, m = ada.call("POST", "/v1/support/messages", map[string]string{"body": "let me speak to an agent"}, nil)
+	if last := m["messages"].([]any)[3].(map[string]any); !strings.Contains(last["body"].(string), "support team") {
+		t.Errorf("handoff: %v", last)
+	}
+	if c, _ := ada.call("POST", "/v1/support/messages", map[string]string{"body": "  "}, nil); c != http.StatusBadRequest {
+		t.Errorf("empty: %d", c)
+	}
+
+	// Ada's user id is 1 in a fresh database.
+	if c, _ := ada.call("POST", "/v1/ops/support/1/reply", map[string]string{"body": "Hi Ada, looking now."}, nil); c != http.StatusUnauthorized {
+		t.Errorf("reply without ops key: %d", c)
+	}
+	if c, e := ada.call("POST", "/v1/ops/support/1/reply", map[string]string{"body": "Hi Ada, looking now."},
+		map[string]string{"X-Ops-Key": opsKey}); c != http.StatusNoContent {
+		t.Fatalf("reply: %d %v", c, e)
+	}
+	_, m = ada.call("GET", "/v1/support/messages", nil, nil)
+	if last := m["messages"].([]any)[4].(map[string]any); last["sender"] != "agent" {
+		t.Errorf("agent message: %v", last)
+	}
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["title"] != "Support replied" {
+		t.Errorf("notification = %v", first)
 	}
 }

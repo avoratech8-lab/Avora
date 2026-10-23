@@ -8,10 +8,13 @@ import 'api.dart';
 import 'models.dart';
 
 class HttpAvoraApi implements AvoraApi {
-  HttpAvoraApi({required this.baseUrl, required this.credentials, http.Client? client})
+  HttpAvoraApi({required this.baseUrl, required this.credentials, this.deviceName = '', http.Client? client})
     : _client = client ?? http.Client();
 
   final Uri baseUrl;
+
+  /// Shown under Me → Devices and in the new-phone notification.
+  final String deviceName;
   final Credentials credentials;
   final http.Client _client;
 
@@ -67,7 +70,12 @@ class HttpAvoraApi implements AvoraApi {
 
   @override
   Future<Session> verify({required String challengeId, required String code, required String pin}) async {
-    final j = await _call('POST', '/v1/auth/verify', body: {'challenge_id': challengeId, 'code': code, 'pin': pin});
+    final j = await _call(
+      'POST',
+      '/v1/auth/verify',
+      body: {'challenge_id': challengeId, 'code': code, 'pin': pin},
+      headers: {if (deviceName.isNotEmpty) 'X-Device-Name': deviceName},
+    );
     final s = Session.fromJson(j as Map<String, dynamic>);
     await credentials.setToken(s.token);
     return s;
@@ -203,6 +211,62 @@ class HttpAvoraApi implements AvoraApi {
       headers: {'Idempotency-Key': idempotencyKey},
     ),
   );
+
+  @override
+  Future<void> changePin({required String oldPin, required String newPin}) =>
+      _call('POST', '/v1/me/pin', body: {'old_pin': oldPin, 'new_pin': newPin});
+
+  @override
+  Future<void> verifyPin(String pin) => _call('POST', '/v1/me/pin/verify', body: {'pin': pin});
+
+  @override
+  Future<List<Device>> devices() async {
+    final j = await _call('GET', '/v1/me/devices');
+    return (j['devices'] as List).map((d) => Device.fromJson(d as Map<String, dynamic>)).toList();
+  }
+
+  @override
+  Future<void> removeDevice(int id) => _call('DELETE', '/v1/me/devices/$id');
+
+  @override
+  Future<KycStatus> kycStatus() async => KycStatus.fromJson(await _call('GET', '/v1/me/kyc'));
+
+  @override
+  Future<KycStatus> verifyKyc({required String kind, required String number}) async =>
+      KycStatus.fromJson(await _call('POST', '/v1/me/kyc', body: {'type': kind, 'number': number}));
+
+  @override
+  Future<(List<AppNotification>, int)> notifications() async {
+    final j = await _call('GET', '/v1/me/notifications');
+    final list = (j['notifications'] as List).map((n) => AppNotification.fromJson(n as Map<String, dynamic>)).toList();
+    return (list, j['unread'] as int? ?? 0);
+  }
+
+  @override
+  Future<void> markNotificationsRead() => _call('POST', '/v1/me/notifications/read');
+
+  @override
+  Future<ReferralSummary> referrals() async => ReferralSummary.fromJson(await _call('GET', '/v1/me/referrals'));
+
+  @override
+  Future<ReferralSummary> joinReferral(String code) async =>
+      ReferralSummary.fromJson(await _call('POST', '/v1/me/referrals', body: {'code': code}));
+
+  @override
+  Future<List<HelpArticle>> helpArticles() async {
+    final j = await _call('GET', '/v1/help/articles');
+    return (j['articles'] as List).map((a) => HelpArticle.fromJson(a as Map<String, dynamic>)).toList();
+  }
+
+  List<SupportMessage> _messages(dynamic j) =>
+      (j['messages'] as List).map((m) => SupportMessage.fromJson(m as Map<String, dynamic>)).toList();
+
+  @override
+  Future<List<SupportMessage>> supportMessages() async => _messages(await _call('GET', '/v1/support/messages'));
+
+  @override
+  Future<List<SupportMessage>> sendSupportMessage(String body) async =>
+      _messages(await _call('POST', '/v1/support/messages', body: {'body': body}));
 
   @override
   Future<void> logout() async {

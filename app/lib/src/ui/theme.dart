@@ -19,6 +19,8 @@ abstract final class Brand {
 /// Manrope is a variable font, so each weight is set on the wght axis too.
 TextStyle _w(double size, double weight, {double? height, double spacing = 0}) => TextStyle(
   fontFamily: 'Manrope',
+  // Manrope has no naira sign; Roboto (Android's system font) does.
+  fontFamilyFallback: const ['Roboto'],
   fontSize: size,
   height: height,
   letterSpacing: spacing,

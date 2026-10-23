@@ -47,3 +47,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // The launch theme is an AppCompat theme, which local_auth needs.
+    implementation("androidx.appcompat:appcompat:1.7.0")
+}

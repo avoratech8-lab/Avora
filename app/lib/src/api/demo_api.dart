@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:math';
 
 import '../credentials.dart';
 import '../ids.dart';
+import '../money.dart';
 import 'api.dart';
 import 'bill_catalog.dart';
+import 'help_catalog.dart';
 import 'models.dart';
 
 /// An in-memory stand-in for the backend, so the app can be tried with no
@@ -15,7 +18,9 @@ import 'models.dart';
 ///   9 stay with the bank for a few seconds, and anything else is delivered;
 /// * 5 free transfers a month, then ₦10 each;
 /// * bills: meter or smartcard numbers ending in 8 are not found, and a
-///   phone, meter or smartcard ending in 0 fails and is refunded.
+///   phone, meter or smartcard ending in 0 fails and is refunded;
+/// * KYC: any 11-digit BVN or NIN is accepted except ones ending in 0, and
+///   the tiers' daily limits apply as on the server.
 class DemoAvoraApi implements AvoraApi {
   DemoAvoraApi({required this.credentials, DateTime Function()? clock, this.pendingFor = const Duration(seconds: 6)})
     : _now = clock ?? DateTime.now;
@@ -75,6 +80,13 @@ class DemoAvoraApi implements AvoraApi {
         ),
       );
       u.balance = welcomeCredit;
+      u.devices.add(Device(id: 1, name: 'This phone', boundAt: _now(), thisPhone: true, signedIn: true));
+      _notify(
+        u,
+        'account',
+        'Welcome to Avora',
+        'We added ${formatNaira(welcomeCredit)} of demo money so you can try things out.',
+      );
       _users[phone] = u;
     }
     final token = randomId();
@@ -137,6 +149,7 @@ class DemoAvoraApi implements AvoraApi {
     }
     final name = await nameEnquiry(bankCode: bankCode, accountNumber: accountNumber);
     final q = await quote(amount);
+    _checkLimit(u, amount);
     if (q.total > u.balance) {
       throw ApiException('insufficient_funds', 'Your balance is too low for this transfer and its fee.', status: 422);
     }
@@ -191,6 +204,17 @@ class DemoAvoraApi implements AvoraApi {
       createdAt: t.createdAt,
     );
     u.transfers[t.id] = done;
+    if (declined) {
+      _notify(
+        u,
+        'transfer',
+        'Transfer refunded',
+        "Your transfer to ${t.accountName} didn't go through. ${formatNaira(t.amount + t.fee)} is back in your wallet.",
+        t.id,
+      );
+    } else {
+      _notify(u, 'transfer', 'Transfer delivered', '${formatNaira(t.amount)} reached ${t.accountName}.', t.id);
+    }
     if (declined) {
       u.balance += t.amount + t.fee;
       u.lines.add(
@@ -264,6 +288,7 @@ class DemoAvoraApi implements AvoraApi {
       throw ApiException('invalid_request', 'Amount must be between the minimum and maximum.', status: 400);
     }
     final name = await validateBillCustomer(billerId: billerId, customer: customer);
+    _checkLimit(u, amount);
     if (amount > u.balance) {
       throw ApiException('insufficient_funds', 'Your balance is too low for this payment.', status: 422);
     }
@@ -289,6 +314,13 @@ class DemoAvoraApi implements AvoraApi {
     u.balance -= amount;
     u.lines.add(StatementLine(kind: 'bill_payment', description: what, ref: id, amount: -amount, at: pay.createdAt));
     if (failed) {
+      _notify(
+        u,
+        'bill',
+        'Payment refunded',
+        "$what didn't go through. ${formatNaira(amount)} is back in your wallet.",
+        id,
+      );
       u.balance += amount;
       u.lines.add(
         StatementLine(kind: 'bill_refund', description: 'Refund: $what', ref: id, amount: amount, at: _now()),
@@ -475,6 +507,232 @@ class DemoAvoraApi implements AvoraApi {
     }
   }
 
+  void _notify(_DemoUser u, String kind, String title, String body, [String ref = '']) => u.notifications.add(
+    AppNotification(
+      id: u.notifications.length + 1,
+      kind: kind,
+      title: title,
+      body: body,
+      ref: ref,
+      createdAt: _now(),
+      read: false,
+    ),
+  );
+
+  static final tiers = [
+    KycTier(tier: 1, dailySend: 5000000, maxBalance: 30000000, needs: 'Phone number'),
+    KycTier(tier: 2, dailySend: 20000000, maxBalance: 50000000, needs: 'BVN or NIN'),
+    KycTier(tier: 3, dailySend: 500000000, maxBalance: 0, needs: 'BVN and NIN'),
+  ];
+
+  int _tier(_DemoUser u) => u.bvn && u.nin ? 3 : (u.bvn || u.nin ? 2 : 1);
+
+  /// Transfers and bills since midnight count against the tier's daily limit.
+  void _checkLimit(_DemoUser u, int amount) {
+    final now = _now();
+    final midnight = DateTime(now.year, now.month, now.day);
+    final today =
+        u.transfers.values
+            .where((t) => !t.createdAt.isBefore(midnight) && t.status != TransferStatus.refunded)
+            .fold<int>(0, (a, t) => a + t.amount) +
+        u.bills.values
+            .where((b) => !b.createdAt.isBefore(midnight) && b.status != BillStatus.refunded)
+            .fold<int>(0, (a, b) => a + b.amount);
+    final tier = _tier(u);
+    final limit = tiers[tier - 1].dailySend;
+    if (today + amount > limit) {
+      var msg =
+          'Tier $tier accounts can send up to ${formatNaira(limit)} a day, and you have '
+          '${formatNaira(max(0, limit - today))} left today.';
+      if (tier < 3) msg += ' Verify your BVN or NIN under Me → Limits to raise it.';
+      throw ApiException('daily_limit', msg, status: 403);
+    }
+  }
+
+  @override
+  Future<void> changePin({required String oldPin, required String newPin}) async {
+    final u = _me;
+    if (u.pin != oldPin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    if (!RegExp(r'^\d{6}$').hasMatch(newPin)) {
+      throw ApiException('invalid_request', 'PIN must be 6 digits.', status: 400);
+    }
+    if (newPin == oldPin) {
+      throw ApiException('invalid_request', 'Choose a PIN different from your current one.', status: 400);
+    }
+    u.pin = newPin;
+    _notify(
+      u,
+      'security',
+      'PIN changed',
+      "Your PIN was changed and your other phones were signed out. If this wasn't you, contact support now.",
+    );
+  }
+
+  @override
+  Future<void> verifyPin(String pin) async {
+    if (_me.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+  }
+
+  @override
+  Future<List<Device>> devices() async => List.of(_me.devices);
+
+  @override
+  Future<void> removeDevice(int id) async {
+    final u = _me;
+    final d = u.devices.where((d) => d.id == id).firstOrNull;
+    if (d == null) throw ApiException('not_found', 'Not found.', status: 404);
+    if (d.thisPhone) {
+      throw ApiException('this_device', "This is the phone you're using. Sign out instead.", status: 409);
+    }
+    u.devices.remove(d);
+  }
+
+  @override
+  Future<KycStatus> kycStatus() async {
+    final u = _me;
+    return KycStatus(tier: _tier(u), bvnVerified: u.bvn, ninVerified: u.nin, tiers: tiers);
+  }
+
+  @override
+  Future<KycStatus> verifyKyc({required String kind, required String number}) async {
+    final u = _me;
+    if (kind != 'bvn' && kind != 'nin') throw ApiException('invalid_request', 'Choose BVN or NIN.', status: 400);
+    if (!RegExp(r'^\d{11}$').hasMatch(number)) {
+      throw ApiException('invalid_request', '${kind.toUpperCase()} must be 11 digits.', status: 400);
+    }
+    if (number.endsWith('0')) {
+      throw ApiException(
+        'kyc_mismatch',
+        "Those details don't match the records. Check the number and try again.",
+        status: 422,
+      );
+    }
+    final before = _tier(u);
+    if (kind == 'bvn') {
+      u.bvn = true;
+    } else {
+      u.nin = true;
+    }
+    final after = _tier(u);
+    if (before < 2 && after >= 2) _rewardReferrer(u);
+    if (after > before) {
+      _notify(
+        u,
+        'account',
+        "You're now on Tier $after",
+        'You can now send up to ${formatNaira(tiers[after - 1].dailySend)} a day.',
+      );
+    }
+    return kycStatus();
+  }
+
+  @override
+  Future<(List<AppNotification>, int)> notifications() async {
+    final u = _me;
+    for (final t in u.transfers.values.toList()) {
+      _settle(u, t);
+    }
+    return (u.notifications.reversed.toList(), u.notifications.where((n) => !n.read).length);
+  }
+
+  @override
+  Future<void> markNotificationsRead() async {
+    final u = _me;
+    for (var i = 0; i < u.notifications.length; i++) {
+      final n = u.notifications[i];
+      if (n.read) continue;
+      u.notifications[i] = AppNotification(
+        id: n.id,
+        kind: n.kind,
+        title: n.title,
+        body: n.body,
+        ref: n.ref,
+        createdAt: n.createdAt,
+        read: true,
+      );
+    }
+  }
+
+  static const referralReward = 50000;
+
+  String _code(_DemoUser u) => 'AVDEMO${u.id.toString().padLeft(2, '0')}';
+
+  @override
+  Future<ReferralSummary> referrals() async {
+    final u = _me;
+    final invited = _users.values.where((x) => x.referrer == u).toList();
+    final rewarded = invited.where((x) => x.referralPaid).length;
+    return ReferralSummary(
+      code: _code(u),
+      reward: referralReward,
+      invited: invited.length,
+      rewarded: rewarded,
+      earned: rewarded * referralReward,
+      joinedWith: u.referrer == null ? '' : _code(u.referrer!),
+      canAddCode: u.referrer == null,
+    );
+  }
+
+  @override
+  Future<ReferralSummary> joinReferral(String code) async {
+    final u = _me;
+    final c = code.trim().toUpperCase();
+    if (c.isEmpty) throw ApiException('invalid_request', 'Enter a code.', status: 400);
+    final referrer = _users.values.where((x) => _code(x) == c).firstOrNull;
+    if (referrer == null) {
+      throw ApiException('unknown_code', "We don't recognise that invite code. Check it and try again.", status: 404);
+    }
+    if (referrer == u) {
+      throw ApiException('own_code', "That's your own invite code. Share it with friends instead.", status: 400);
+    }
+    if (u.referrer != null) {
+      throw ApiException('code_used', "You've already joined with an invite code.", status: 409);
+    }
+    u.referrer = referrer;
+    if (_tier(u) >= 2) _rewardReferrer(u);
+    return referrals();
+  }
+
+  void _rewardReferrer(_DemoUser u) {
+    final r = u.referrer;
+    if (r == null || u.referralPaid) return;
+    u.referralPaid = true;
+    r.balance += referralReward;
+    r.lines.add(
+      StatementLine(
+        kind: 'referral_reward',
+        description: 'Referral reward',
+        ref: '',
+        amount: referralReward,
+        at: _now(),
+      ),
+    );
+    _notify(
+      r,
+      'money_in',
+      '${formatNaira(referralReward)} referral reward',
+      'A friend you invited just verified their account. Thanks for spreading the word!',
+    );
+  }
+
+  @override
+  Future<List<HelpArticle>> helpArticles() async => demoHelpArticles();
+
+  @override
+  Future<List<SupportMessage>> supportMessages() async => List.of(_me.support);
+
+  @override
+  Future<List<SupportMessage>> sendSupportMessage(String body) async {
+    final u = _me;
+    final text = body.trim();
+    if (text.isEmpty) throw ApiException('invalid_request', 'Write a message.', status: 400);
+    u.support.add(SupportMessage(id: u.support.length + 1, sender: 'customer', body: text, createdAt: _now()));
+    u.support.add(
+      SupportMessage(id: u.support.length + 1, sender: 'bot', body: supportAnswer(text), createdAt: _now()),
+    );
+    return List.of(u.support);
+  }
+
   @override
   Future<void> logout() async {
     _tokens.remove(credentials.token);
@@ -487,8 +745,15 @@ class _DemoUser {
 
   final int id;
   final String accountNumber;
-  final String pin;
+  String pin;
   int balance = 0;
+  bool bvn = false;
+  bool nin = false;
+  final devices = <Device>[];
+  final support = <SupportMessage>[];
+  _DemoUser? referrer;
+  bool referralPaid = false;
+  final notifications = <AppNotification>[];
   final lines = <StatementLine>[];
   final transfers = <String, Transfer>{};
   final byKey = <String, String>{};

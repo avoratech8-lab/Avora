@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"avora/backend/internal/ledger"
+	"avora/backend/internal/notify"
 	"avora/backend/internal/wallets"
 )
 
@@ -285,6 +286,12 @@ func (s *Service) finalize(ctx context.Context, id string, to Status, res PayRes
 		where id = $1`, id, to, res.Token, res.Reference, res.Reason, s.now())
 	if err != nil {
 		return Payment{}, err
+	}
+	if to == Refunded {
+		if err := notify.Add(ctx, tx, p.WalletAccountID, "bill", "Payment refunded",
+			fmt.Sprintf("%s didn't go through. %s is back in your wallet.", what, notify.Naira(p.Amount)), id); err != nil {
+			return Payment{}, err
+		}
 	}
 	p, err = s.get(ctx, tx, id)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"avora/backend/internal/ledger"
+	"avora/backend/internal/notify"
 	"avora/backend/internal/rails"
 	"avora/backend/internal/wallets"
 )
@@ -303,6 +304,11 @@ func (s *Service) waitLonger(ctx context.Context, t Transfer) (Transfer, error) 
 		if err != nil {
 			return Transfer{}, err
 		}
+		if err := notify.Add(ctx, s.db, t.WalletAccountID, "transfer", "We're checking a transfer",
+			fmt.Sprintf("%s's bank hasn't confirmed your %s transfer yet. Your money is safe; if it didn't arrive you'll get it all back.",
+				t.AccountName, notify.Naira(t.Amount)), t.ID); err != nil {
+			return Transfer{}, err
+		}
 		return s.get(ctx, s.db, t.ID)
 	}
 	i := min(t.RequeryCount, len(s.cfg.RequeryBackoff)-1)
@@ -357,6 +363,14 @@ func (s *Service) finalize(ctx context.Context, id string, to Status, sessionID,
 			failure_reason = nullif($4, ''), next_requery_at = null, updated_at = $5
 		where id = $1`, id, to, sessionID, reason, s.now())
 	if err != nil {
+		return Transfer{}, err
+	}
+	title, body := "Transfer delivered", fmt.Sprintf("%s reached %s.", notify.Naira(t.Amount), t.AccountName)
+	if to == Refunded {
+		title = "Transfer refunded"
+		body = fmt.Sprintf("Your transfer to %s didn't go through. %s is back in your wallet.", t.AccountName, notify.Naira(total))
+	}
+	if err := notify.Add(ctx, tx, t.WalletAccountID, "transfer", title, body, id); err != nil {
 		return Transfer{}, err
 	}
 	t, err = s.get(ctx, tx, id)

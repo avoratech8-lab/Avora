@@ -81,9 +81,53 @@ void main() {
       send('0123456781', 1000, pin: '000001'),
       throwsA(isA<ApiException>().having((e) => e.code, 'code', 'wrong_pin')),
     );
+    // Over the Tier 1 daily limit, which is the same as the welcome credit.
+    await expectLater(
+      send('0123456781', DemoAvoraApi.welcomeCredit + 1),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'daily_limit')),
+    );
+    await api.verifyKyc(kind: 'bvn', number: '22212345671');
     await expectLater(
       send('0123456781', DemoAvoraApi.welcomeCredit + 1),
       throwsA(isA<ApiException>().having((e) => e.code, 'code', 'insufficient_funds')),
+    );
+  });
+
+  test('KYC raises the tier and the daily limit, and says so', () async {
+    expect((await api.kycStatus()).tier, 1);
+    await expectLater(
+      api.verifyKyc(kind: 'nin', number: '12345678900'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'kyc_mismatch')),
+    );
+    expect((await api.verifyKyc(kind: 'nin', number: '12345678901')).tier, 2);
+    final s = await api.verifyKyc(kind: 'bvn', number: '22212345671');
+    expect(s.tier, 3);
+    expect(s.limits.maxBalance, 0);
+
+    final (items, unread) = await api.notifications();
+    expect(items.first.title, "You're now on Tier 3");
+    expect(unread, 3); // welcome, tier 2, tier 3
+    await api.markNotificationsRead();
+    expect((await api.notifications()).$2, 0);
+  });
+
+  test('changing the PIN needs the old one and is used from then on', () async {
+    await expectLater(
+      api.changePin(oldPin: '000001', newPin: '246810'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'wrong_pin')),
+    );
+    await api.changePin(oldPin: '135790', newPin: '246810');
+    await api.verifyPin('246810');
+    await expectLater(api.verifyPin('135790'), throwsA(isA<ApiException>()));
+    expect((await api.notifications()).$1.first.title, 'PIN changed');
+  });
+
+  test('this phone is listed and cannot be removed', () async {
+    final devices = await api.devices();
+    expect(devices.single.thisPhone, isTrue);
+    await expectLater(
+      api.removeDevice(devices.single.id),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'this_device')),
     );
   });
 
@@ -187,5 +231,43 @@ void main() {
     );
     now = now.add(const Duration(days: 30));
     expect((await api.withdrawFromPot(short.id, idempotencyKey: 's2')).open, isFalse);
+  });
+
+  test('a friend who joins with your code and verifies pays you once', () async {
+    final mine = await api.referrals();
+    expect(mine.code, startsWith('AV'));
+    await expectLater(
+      api.joinReferral(mine.code),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'own_code')),
+    );
+
+    await api.logout();
+    final c = await api.startOtp('08029998888');
+    await api.verify(challengeId: c, code: DemoAvoraApi.code, pin: '246810');
+    expect((await api.joinReferral(mine.code.toLowerCase())).joinedWith, mine.code);
+    await expectLater(
+      api.joinReferral(mine.code),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'code_used')),
+    );
+    await api.verifyKyc(kind: 'bvn', number: '22212345671');
+    await api.verifyKyc(kind: 'nin', number: '12345678901');
+
+    await api.logout();
+    final c2 = await api.startOtp('08031234567');
+    await api.verify(challengeId: c2, code: DemoAvoraApi.code, pin: '135790');
+    final after = await api.referrals();
+    expect(after.invited, 1);
+    expect(after.earned, DemoAvoraApi.referralReward);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit + DemoAvoraApi.referralReward);
+  });
+
+  test('the support assistant answers from the help centre', () async {
+    expect(await api.helpArticles(), hasLength(10));
+    final m = await api.sendSupportMessage('what are the transfer fees?');
+    expect(m, hasLength(2));
+    expect(m.last.sender, 'bot');
+    expect(m.last.body, startsWith('How much do transfers cost?'));
+    final h = await api.sendSupportMessage('I want to speak to an agent');
+    expect(h.last.body, contains('support team'));
   });
 }

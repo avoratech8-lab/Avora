@@ -19,10 +19,13 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/support"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
 )
@@ -69,6 +72,12 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	refSvc, err := referrals.NewService(ctx, pool, referrals.DefaultConfig())
+	if err != nil {
+		return err
+	}
+	kycSvc := kyc.NewService(pool, kyc.Sandbox{})
+	kycSvc.OnVerified = refSvc.Verified
 	srv := &api.Server{
 		DB:            pool,
 		Rail:          rail,
@@ -76,6 +85,9 @@ func run(log *slog.Logger) error {
 		Transfers:     svc,
 		Bills:         bills.NewService(pool, bills.Sandbox{}, sys),
 		Savings:       savingsSvc,
+		KYC:           kycSvc,
+		Referrals:     refSvc,
+		Support:       support.NewService(pool),
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,

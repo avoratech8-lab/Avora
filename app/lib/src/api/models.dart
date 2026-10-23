@@ -302,3 +302,157 @@ class SavingsPot {
 
 /// Rough profit if the bank's results match the expected rate.
 int expectedProfit(int amount, int rateBps, int days) => amount * rateBps * days ~/ (10000 * 365);
+
+/// A phone the customer has signed in on.
+class Device {
+  Device({
+    required this.id,
+    required this.name,
+    required this.boundAt,
+    required this.thisPhone,
+    required this.signedIn,
+  });
+
+  factory Device.fromJson(Map<String, dynamic> j) => Device(
+    id: j['id'] as int,
+    name: j['name'] as String? ?? '',
+    boundAt: DateTime.parse(j['bound_at'] as String),
+    thisPhone: j['this_phone'] as bool? ?? false,
+    signedIn: j['signed_in'] as bool? ?? false,
+  );
+
+  final int id;
+  final String name;
+  final DateTime boundAt;
+  final bool thisPhone;
+  final bool signedIn;
+}
+
+/// What a KYC tier allows.
+class KycTier {
+  KycTier({required this.tier, required this.dailySend, required this.maxBalance, required this.needs});
+
+  factory KycTier.fromJson(Map<String, dynamic> j) => KycTier(
+    tier: j['tier'] as int,
+    dailySend: j['daily_send'] as int,
+    maxBalance: j['max_balance'] as int,
+    needs: j['needs'] as String? ?? '',
+  );
+
+  final int tier;
+  final int dailySend; // kobo
+  final int maxBalance; // kobo; 0 means no cap
+  final String needs;
+}
+
+class KycStatus {
+  KycStatus({required this.tier, required this.bvnVerified, required this.ninVerified, required this.tiers});
+
+  factory KycStatus.fromJson(Map<String, dynamic> j) => KycStatus(
+    tier: j['tier'] as int,
+    bvnVerified: j['bvn_verified'] as bool? ?? false,
+    ninVerified: j['nin_verified'] as bool? ?? false,
+    tiers: (j['tiers'] as List).map((t) => KycTier.fromJson(t as Map<String, dynamic>)).toList(),
+  );
+
+  final int tier;
+  final bool bvnVerified;
+  final bool ninVerified;
+  final List<KycTier> tiers;
+
+  KycTier get limits => tiers.firstWhere((t) => t.tier == tier, orElse: () => tiers.first);
+}
+
+class AppNotification {
+  AppNotification({
+    required this.id,
+    required this.kind,
+    required this.title,
+    required this.body,
+    required this.ref,
+    required this.createdAt,
+    required this.read,
+  });
+
+  factory AppNotification.fromJson(Map<String, dynamic> j) => AppNotification(
+    id: j['id'] as int,
+    kind: j['kind'] as String,
+    title: j['title'] as String,
+    body: j['body'] as String? ?? '',
+    ref: j['ref'] as String? ?? '',
+    createdAt: DateTime.parse(j['created_at'] as String),
+    read: j['read_at'] != null,
+  );
+
+  final int id;
+  final String kind;
+  final String title;
+  final String body;
+  final String ref;
+  final DateTime createdAt;
+  final bool read;
+}
+
+class ReferralSummary {
+  ReferralSummary({
+    required this.code,
+    required this.reward,
+    required this.invited,
+    required this.rewarded,
+    required this.earned,
+    required this.joinedWith,
+    required this.canAddCode,
+  });
+
+  factory ReferralSummary.fromJson(Map<String, dynamic> j) => ReferralSummary(
+    code: j['code'] as String,
+    reward: j['reward'] as int? ?? 0,
+    invited: j['invited'] as int? ?? 0,
+    rewarded: j['rewarded'] as int? ?? 0,
+    earned: j['earned'] as int? ?? 0,
+    joinedWith: j['joined_with'] as String? ?? '',
+    canAddCode: j['can_add_code'] as bool? ?? false,
+  );
+
+  final String code;
+  final int reward; // kobo per verified friend
+  final int invited;
+  final int rewarded;
+  final int earned; // kobo
+  final String joinedWith;
+  final bool canAddCode;
+}
+
+class HelpArticle {
+  const HelpArticle({required this.id, required this.topic, required this.title, required this.body});
+
+  factory HelpArticle.fromJson(Map<String, dynamic> j) => HelpArticle(
+    id: j['id'] as String,
+    topic: j['topic'] as String,
+    title: j['title'] as String,
+    body: j['body'] as String,
+  );
+
+  final String id;
+  final String topic;
+  final String title;
+  final String body;
+}
+
+class SupportMessage {
+  SupportMessage({required this.id, required this.sender, required this.body, required this.createdAt});
+
+  factory SupportMessage.fromJson(Map<String, dynamic> j) => SupportMessage(
+    id: j['id'] as int,
+    sender: j['sender'] as String,
+    body: j['body'] as String,
+    createdAt: DateTime.parse(j['created_at'] as String),
+  );
+
+  final int id;
+  final String sender; // customer, bot or agent
+  final String body;
+  final DateTime createdAt;
+
+  bool get mine => sender == 'customer';
+}

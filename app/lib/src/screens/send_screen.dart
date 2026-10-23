@@ -7,6 +7,7 @@ import '../app.dart';
 import '../banks.dart';
 import '../ids.dart';
 import '../money.dart';
+import '../pay_code.dart';
 import '../recipients.dart';
 import '../ui/widgets.dart';
 import 'transfer_screen.dart';
@@ -14,9 +15,12 @@ import 'transfer_screen.dart';
 /// Step 1: who. Pick a bank, type the account number, and we look up the
 /// name as soon as it has 10 digits. Saved recipients skip all of that.
 class SendScreen extends StatefulWidget {
-  const SendScreen({super.key, this.recipient});
+  const SendScreen({super.key, this.recipient, this.payCode});
 
   final Recipient? recipient;
+
+  /// From a scanned QR code or a payment request.
+  final PayCode? payCode;
 
   @override
   State<SendScreen> createState() => _SendScreenState();
@@ -38,6 +42,19 @@ class _SendScreenState extends State<SendScreen> {
       _bank = banks.firstWhere((b) => b.code == r.bankCode, orElse: () => Bank(r.bankCode, bankName(r.bankCode)));
       _account.text = r.accountNumber;
       _name = r.accountName;
+    }
+    final code = widget.payCode;
+    if (code != null) {
+      if (code.bankCode.isNotEmpty) {
+        _bank = banks.firstWhere(
+          (b) => b.code == code.bankCode,
+          orElse: () => Bank(code.bankCode, bankName(code.bankCode)),
+        );
+      }
+      _account.text = code.accountNumber;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _changed();
+      });
     }
   }
 
@@ -89,7 +106,12 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   void _continue(Recipient r) {
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AmountScreen(recipient: r)));
+    final code = widget.payCode;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AmountScreen(recipient: r, amount: code?.amount ?? 0, note: code?.note ?? ''),
+      ),
+    );
   }
 
   @override
@@ -273,9 +295,13 @@ class _BankPickerState extends State<_BankPicker> {
 
 /// Step 2: how much, on a big number pad, with a note.
 class AmountScreen extends StatefulWidget {
-  const AmountScreen({super.key, required this.recipient});
+  const AmountScreen({super.key, required this.recipient, this.amount = 0, this.note = ''});
 
   final Recipient recipient;
+
+  /// Filled in from a payment request; the payer can still change them.
+  final int amount;
+  final String note;
 
   @override
   State<AmountScreen> createState() => _AmountScreenState();
@@ -286,6 +312,14 @@ class _AmountScreenState extends State<AmountScreen> {
   final _note = TextEditingController();
   bool _busy = false;
   Wallet? _wallet;
+
+  @override
+  void initState() {
+    super.initState();
+    final a = widget.amount;
+    if (a > 0) _typed = a % 100 == 0 ? '${a ~/ 100}' : '${a ~/ 100}.${(a % 100).toString().padLeft(2, '0')}';
+    _note.text = widget.note;
+  }
 
   @override
   void didChangeDependencies() {
@@ -531,9 +565,22 @@ class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
       _error = null;
     });
     if (_pin.length < 6) return;
+    await _approve(_pin);
+  }
+
+  /// Asks for a fingerprint or face instead of the PIN, when that's on.
+  Future<void> _biometrics() async {
+    if (_sending) return;
+    final pin = await AppScope.of(context).security.pinByBiometrics('Approve ${widget.headline}');
+    if (pin == null || !mounted) return;
+    setState(() => _pin = pin);
+    await _approve(pin);
+  }
+
+  Future<void> _approve(String pin) async {
     setState(() => _sending = true);
     try {
-      final result = await widget.action(_pin, _key);
+      final result = await widget.action(pin, _key);
       if (mounted) Navigator.of(context).pop(result);
     } catch (e) {
       if (!mounted) return;
@@ -588,7 +635,14 @@ class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
         ),
       ],
       const SizedBox(height: 20),
-      PrimaryButton(key: const Key('confirm'), label: 'Confirm', onPressed: () => setState(() => _askPin = true)),
+      PrimaryButton(
+        key: const Key('confirm'),
+        label: 'Confirm',
+        onPressed: () {
+          setState(() => _askPin = true);
+          if (AppScope.of(context).security.biometricsOn) _biometrics();
+        },
+      ),
     ],
   );
 
@@ -622,6 +676,8 @@ class _ConfirmSheetState<T> extends State<ConfirmSheet<T>> {
         onBackspace: () {
           if (_pin.isNotEmpty && !_sending) setState(() => _pin = _pin.substring(0, _pin.length - 1));
         },
+        extraIcon: AppScope.of(context).security.biometricsOn ? Icons.fingerprint_rounded : null,
+        onExtra: _biometrics,
       ),
     ],
   );

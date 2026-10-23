@@ -61,6 +61,36 @@ abstract class AvoraApi {
     bool breakEarly = false,
     required String idempotencyKey,
   });
+
+  /// Changes the PIN; other phones are signed out.
+  Future<void> changePin({required String oldPin, required String newPin});
+
+  /// Checks the PIN without moving money, to unlock the app.
+  Future<void> verifyPin(String pin);
+
+  Future<List<Device>> devices();
+  Future<void> removeDevice(int id);
+
+  Future<KycStatus> kycStatus();
+
+  /// Verifies a BVN or NIN ([kind] is 'bvn' or 'nin') to raise the tier.
+  Future<KycStatus> verifyKyc({required String kind, required String number});
+
+  /// The latest notifications and how many are unread.
+  Future<(List<AppNotification>, int)> notifications();
+  Future<void> markNotificationsRead();
+
+  Future<ReferralSummary> referrals();
+
+  /// Records the invite code this customer joined with.
+  Future<ReferralSummary> joinReferral(String code);
+
+  Future<List<HelpArticle>> helpArticles();
+  Future<List<SupportMessage>> supportMessages();
+
+  /// Sends a chat message; the reply comes back with the conversation.
+  Future<List<SupportMessage>> sendSupportMessage(String body);
+
   Future<void> logout();
 }
 

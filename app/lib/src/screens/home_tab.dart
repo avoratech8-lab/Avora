@@ -11,6 +11,8 @@ import '../ui/theme.dart';
 import '../ui/transaction_tile.dart';
 import '../ui/widgets.dart';
 import 'bills_screens.dart';
+import 'invite_screen.dart';
+import 'notifications_screen.dart';
 import 'open_line.dart';
 import 'receive_sheet.dart';
 import 'send_screen.dart';
@@ -66,9 +68,22 @@ class _HomeTabState extends State<HomeTab> {
                   ),
                 ),
                 IconButton.filledTonal(
+                  key: const Key('scan'),
+                  tooltip: 'Scan to pay',
+                  onPressed: () => _go(const ScanScreen()),
+                  icon: const Icon(Icons.qr_code_scanner_rounded),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  key: const Key('bell'),
                   tooltip: 'Notifications',
-                  onPressed: () => showComingSoon(context, 'Notifications', Icons.notifications_none_rounded),
-                  icon: const Icon(Icons.notifications_none_rounded),
+                  onPressed: () => _go(const NotificationsScreen()),
+                  icon: Badge(
+                    isLabelVisible: shell.unread > 0,
+                    label: Text('${shell.unread > 9 ? '9+' : shell.unread}'),
+                    backgroundColor: Brand.danger,
+                    child: const Icon(Icons.notifications_none_rounded),
+                  ),
                 ),
               ],
             ),
@@ -161,21 +176,12 @@ class _HomeTabState extends State<HomeTab> {
                 final w = shell.wallet;
                 if (w != null) showReceiveSheet(context, w.accountNumber);
               }),
-              tile(
-                'Request money',
-                Icons.request_page_outlined,
-                () => showComingSoon(context, 'Request money', Icons.request_page_outlined),
-              ),
-              tile(
-                'Scan to pay',
-                Icons.qr_code_scanner_rounded,
-                () => showComingSoon(context, 'Scan to pay', Icons.qr_code_scanner_rounded),
-              ),
-              tile(
-                'Refer and earn',
-                Icons.card_giftcard_rounded,
-                () => showComingSoon(context, 'Refer and earn', Icons.card_giftcard_rounded),
-              ),
+              tile('Request money', Icons.request_page_outlined, () {
+                final w = shell.wallet;
+                if (w != null) _go(RequestMoneyScreen(accountNumber: w.accountNumber));
+              }),
+              tile('Scan to pay', Icons.qr_code_scanner_rounded, () => _go(const ScanScreen())),
+              tile('Refer and earn', Icons.card_giftcard_rounded, () => _go(const InviteScreen())),
               const SizedBox(height: 8),
             ],
           ),
