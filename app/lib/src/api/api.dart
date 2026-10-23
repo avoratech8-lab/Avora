@@ -80,6 +80,24 @@ abstract class AvoraApi {
   Future<(List<AppNotification>, int)> notifications();
   Future<void> markNotificationsRead();
 
+  Future<Profile> profile();
+
+  /// Sets my name and/or @tag; empty values are left as they are.
+  Future<Profile> updateProfile({String name = '', String tag = ''});
+
+  /// Finds an Avora customer by @tag or phone number.
+  Future<Person> findPerson(String query);
+
+  /// Sends money to another Avora customer: free and instant.
+  Future<P2PTransfer> sendToAvora({
+    required String to,
+    required int amount,
+    required String note,
+    required String pin,
+    required String idempotencyKey,
+  });
+  Future<P2PTransfer> p2pTransfer(String id);
+
   Future<ReferralSummary> referrals();
 
   /// Records the invite code this customer joined with.

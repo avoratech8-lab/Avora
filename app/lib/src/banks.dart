@@ -34,4 +34,8 @@ const banks = <Bank>[
   Bank('057', 'Zenith Bank'),
 ];
 
-String bankName(String code) => banks.firstWhere((b) => b.code == code, orElse: () => Bank(code, 'Bank $code')).name;
+/// Recipients saved with this "bank" are Avora customers, paid by @tag.
+const avoraBank = 'avora';
+
+String bankName(String code) =>
+    code == avoraBank ? 'Avora' : banks.firstWhere((b) => b.code == code, orElse: () => Bank(code, 'Bank $code')).name;

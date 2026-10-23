@@ -5,6 +5,7 @@ import '../app.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'help_screens.dart';
+import 'profile_screen.dart';
 import 'invite_screen.dart';
 import 'limits_screen.dart';
 import 'security_screens.dart';
@@ -70,10 +71,16 @@ class ProfileTab extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('My Avora account', style: theme.textTheme.titleMedium?.copyWith(color: Colors.white)),
+                      Text(
+                        (shell.profile?.name.isNotEmpty ?? false) ? shell.profile!.name : 'My Avora account',
+                        style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
+                      ),
                       const SizedBox(height: 2),
                       Text(
-                        w == null ? '—' : 'TAJBank · ${w.accountNumber}',
+                        [
+                          if (shell.profile?.tag.isNotEmpty ?? false) '@${shell.profile!.tag}',
+                          if (w != null) 'TAJBank · ${w.accountNumber}',
+                        ].join('  ·  '),
                         style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white.withValues(alpha: 0.8)),
                       ),
                     ],
@@ -121,7 +128,12 @@ class ProfileTab extends StatelessWidget {
               ),
             ),
           _Section('Account', [
-            _Item(Icons.badge_outlined, 'Personal details', () => soon('Personal details', Icons.badge_outlined)),
+            _Item(
+              Icons.badge_outlined,
+              'Personal details and @tag',
+              () => go(ProfileScreen(initial: shell.profile)),
+              key: const Key('personal'),
+            ),
             _Item(Icons.speed_rounded, 'Limits', () => go(const LimitsScreen()), key: const Key('limits')),
             _Item(Icons.description_outlined, 'Statements', () => soon('Statements', Icons.description_outlined)),
             _Item(

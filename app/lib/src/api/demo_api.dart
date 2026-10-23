@@ -23,7 +23,23 @@ import 'models.dart';
 ///   the tiers' daily limits apply as on the server.
 class DemoAvoraApi implements AvoraApi {
   DemoAvoraApi({required this.credentials, DateTime Function()? clock, this.pendingFor = const Duration(seconds: 6)})
-    : _now = clock ?? DateTime.now;
+    : _now = clock ?? DateTime.now {
+    // A few people to find and pay by @tag in the demo.
+    for (final (phone, name, tag) in demoPeople) {
+      final u = _DemoUser(_users.length + 1, '90${phone.substring(phone.length - 8)}', '135790')
+        ..phone = phone
+        ..name = name
+        ..tag = tag;
+      _users[phone] = u;
+    }
+  }
+
+  /// Demo customers anyone can send to.
+  static const demoPeople = [
+    ('08011110001', 'Tolu Adeyemi', 'tolu'),
+    ('08011110002', 'Chidi Okafor', 'chidi'),
+    ('08011110003', 'Amina Bello', 'amina'),
+  ];
 
   static const code = '000000';
   static const welcomeCredit = 5000000;
@@ -69,7 +85,7 @@ class DemoAvoraApi implements AvoraApi {
 
     final newUser = known == null;
     if (newUser) {
-      final u = _DemoUser(_users.length + 1, '90${phone.substring(phone.length - 8)}', pin);
+      final u = _DemoUser(_users.length + 1, '90${phone.substring(phone.length - 8)}', pin)..phone = phone;
       u.lines.add(
         StatementLine(
           kind: 'inbound_credit',
@@ -537,7 +553,8 @@ class DemoAvoraApi implements AvoraApi {
             .fold<int>(0, (a, t) => a + t.amount) +
         u.bills.values
             .where((b) => !b.createdAt.isBefore(midnight) && b.status != BillStatus.refunded)
-            .fold<int>(0, (a, b) => a + b.amount);
+            .fold<int>(0, (a, b) => a + b.amount) +
+        u.p2p.values.where((t) => t.outgoing && !t.createdAt.isBefore(midnight)).fold<int>(0, (a, t) => a + t.amount);
     final tier = _tier(u);
     final limit = tiers[tier - 1].dailySend;
     if (today + amount > limit) {
@@ -653,6 +670,135 @@ class DemoAvoraApi implements AvoraApi {
     }
   }
 
+  static String _last10(String phone) {
+    final d = phone.replaceAll(RegExp(r'\D'), '');
+    return d.length >= 10 ? d.substring(d.length - 10) : d;
+  }
+
+  static String _mask(String phone) {
+    final d = _last10(phone);
+    return d.length == 10 ? '0${d.substring(0, 3)} *** ${d.substring(6)}' : '';
+  }
+
+  Person _person(_DemoUser u) =>
+      Person(tag: u.tag, name: u.name.isEmpty ? 'Avora customer' : u.name, phone: _mask(u.phone));
+
+  static String _who(_DemoUser u) => switch ((u.name, u.tag)) {
+    ('', '') => 'an Avora customer',
+    ('', final t) => '@$t',
+    (final n, '') => n,
+    (final n, final t) => '$n (@$t)',
+  };
+
+  @override
+  Future<Profile> profile() async {
+    final u = _me;
+    return Profile(name: u.name, tag: u.tag, phone: u.phone, accountNumber: u.accountNumber);
+  }
+
+  static const _reserved = {
+    'avora',
+    'admin',
+    'support',
+    'help',
+    'official',
+    'security',
+    'tajbank',
+    'cbn',
+    'agent',
+    'staff',
+  };
+
+  @override
+  Future<Profile> updateProfile({String name = '', String tag = ''}) async {
+    final u = _me;
+    final n = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).join(' ');
+    final t = tag.trim().replaceFirst('@', '').toLowerCase();
+    if (n.isNotEmpty && (n.length < 2 || n.length > 40)) {
+      throw ApiException('invalid_request', 'Name must be 2 to 40 characters.', status: 400);
+    }
+    if (t.isNotEmpty) {
+      if (!RegExp(r'^[a-z][a-z0-9_]{2,19}$').hasMatch(t)) {
+        throw ApiException(
+          'invalid_request',
+          'A tag is 3 to 20 letters, numbers or _, starting with a letter.',
+          status: 400,
+        );
+      }
+      if (_reserved.contains(t) || _users.values.any((x) => x != u && x.tag == t)) {
+        throw ApiException('tag_taken', 'That tag is taken. Try another.', status: 409);
+      }
+      u.tag = t;
+    }
+    if (n.isNotEmpty) u.name = n;
+    return profile();
+  }
+
+  _DemoUser _find(String query) {
+    final me = _me;
+    final q = query.trim();
+    _DemoUser? found;
+    if (q.startsWith('@') || (q.isNotEmpty && !RegExp(r'^[+\d]').hasMatch(q))) {
+      final t = q.replaceFirst('@', '').toLowerCase();
+      found = _users.values.where((x) => x.tag.isNotEmpty && x.tag == t).firstOrNull;
+    } else {
+      final d = _last10(q);
+      if (d.length != 10) throw ApiException('invalid_request', 'Enter an @tag or a phone number.', status: 400);
+      found = _users.values.where((x) => _last10(x.phone) == d).firstOrNull;
+    }
+    if (found == null) {
+      throw ApiException('person_not_found', 'No Avora customer has that tag or phone number.', status: 404);
+    }
+    if (found == me) throw ApiException('self', "That's you. Pick someone else.", status: 400);
+    return found;
+  }
+
+  @override
+  Future<Person> findPerson(String query) async => _person(_find(query));
+
+  @override
+  Future<P2PTransfer> sendToAvora({
+    required String to,
+    required int amount,
+    required String note,
+    required String pin,
+    required String idempotencyKey,
+  }) async {
+    final u = _me;
+    final existing = u.p2pByKey[idempotencyKey];
+    if (existing != null) return u.p2p[existing]!;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    if (amount <= 0) throw ApiException('invalid_request', 'Amount must be more than zero.', status: 400);
+    _checkLimit(u, amount);
+    final other = _find(to);
+    if (amount > u.balance) {
+      throw ApiException(
+        'insufficient_funds',
+        'Your balance is too low for this payment, including any fee.',
+        status: 422,
+      );
+    }
+    final id = randomId();
+    final at = _now();
+    final n = note.trim();
+    u.balance -= amount;
+    other.balance += amount;
+    u.lines.add(StatementLine(kind: 'p2p_out', description: 'To ${_who(other)}', ref: id, amount: -amount, at: at));
+    other.lines.add(StatementLine(kind: 'p2p_in', description: 'From ${_who(u)}', ref: id, amount: amount, at: at));
+    u.p2p[id] = P2PTransfer(id: id, outgoing: true, amount: amount, note: n, other: _person(other), createdAt: at);
+    other.p2p[id] = P2PTransfer(id: id, outgoing: false, amount: amount, note: n, other: _person(u), createdAt: at);
+    u.p2pByKey[idempotencyKey] = id;
+    _notify(other, 'money_in', '${formatNaira(amount)} received', 'From ${_who(u)}${n.isEmpty ? '' : ': $n'}', id);
+    return u.p2p[id]!;
+  }
+
+  @override
+  Future<P2PTransfer> p2pTransfer(String id) async {
+    final t = _me.p2p[id];
+    if (t == null) throw ApiException('not_found', 'Not found.', status: 404);
+    return t;
+  }
+
   static const referralReward = 50000;
 
   String _code(_DemoUser u) => 'AVDEMO${u.id.toString().padLeft(2, '0')}';
@@ -750,6 +896,11 @@ class _DemoUser {
   bool bvn = false;
   bool nin = false;
   final devices = <Device>[];
+  String phone = '';
+  String name = '';
+  String tag = '';
+  final p2p = <String, P2PTransfer>{};
+  final p2pByKey = <String, String>{};
   final support = <SupportMessage>[];
   _DemoUser? referrer;
   bool referralPaid = false;

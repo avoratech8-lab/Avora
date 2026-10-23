@@ -22,6 +22,7 @@ class ShellScreenState extends State<ShellScreen> {
   Wallet? wallet;
   List<StatementLine> lines = const [];
   int unread = 0;
+  Profile? profile;
   int tier = 1;
   bool loading = true;
   Object? error;
@@ -50,16 +51,19 @@ class ShellScreenState extends State<ShellScreen> {
     // the tier are extras, so Home still shows if they fail.
     final unreadF = api.notifications().then((n) => n.$2, onError: (_) => unread);
     final tierF = api.kycStatus().then((s) => s.tier, onError: (_) => tier);
+    final profileF = api.profile().then<Profile?>((p) => p, onError: (_) => profile);
     try {
       final (w, l) = await (api.wallet(), api.statement()).wait;
       final unreadNow = await unreadF;
       final tierNow = await tierF;
+      final profileNow = await profileF;
       if (!mounted) return;
       setState(() {
         wallet = w;
         lines = l;
         unread = unreadNow;
         tier = tierNow;
+        profile = profileNow;
         error = null;
         loading = false;
       });

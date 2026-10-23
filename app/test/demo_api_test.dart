@@ -270,4 +270,44 @@ void main() {
     final h = await api.sendSupportMessage('I want to speak to an agent');
     expect(h.last.body, contains('support team'));
   });
+
+  test('Avora tags: claim one, find people, send free and instant, once per key', () async {
+    await expectLater(
+      api.updateProfile(tag: '@1bad'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'invalid_request')),
+    );
+    await expectLater(
+      api.updateProfile(tag: 'tolu'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'tag_taken')),
+    );
+    final me = await api.updateProfile(name: ' Ada   Obi ', tag: '@Ada_O');
+    expect((me.name, me.tag), ('Ada Obi', 'ada_o'));
+
+    expect((await api.findPerson('@TOLU')).name, 'Tolu Adeyemi');
+    final chidi = await api.findPerson('+234 801 111 0002');
+    expect((chidi.handle, chidi.phone), ('@chidi', '0801 *** 0002'));
+    await expectLater(api.findPerson('@ada_o'), throwsA(isA<ApiException>().having((e) => e.code, 'code', 'self')));
+    await expectLater(
+      api.findPerson('@nobody'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'person_not_found')),
+    );
+
+    Future<P2PTransfer> pay(String key) =>
+        api.sendToAvora(to: '@tolu', amount: 1500000, note: 'Suya', pin: '135790', idempotencyKey: key);
+    final t = await pay('k1');
+    expect((await pay('k1')).id, t.id);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 1500000);
+    final line = (await api.statement()).first;
+    expect((line.kind, line.description, line.amount), ('p2p_out', 'To Tolu Adeyemi (@tolu)', -1500000));
+    expect((await api.p2pTransfer(t.id)).other.tag, 'tolu');
+
+    // Tolu sees it arrive, free, with the note.
+    await api.logout();
+    final c = await api.startOtp('08011110001');
+    await api.verify(challengeId: c, code: DemoAvoraApi.code, pin: '135790');
+    final got = await api.p2pTransfer(t.id);
+    expect((got.outgoing, got.amount, got.note, got.other.handle), (false, 1500000, 'Suya', '@ada_o'));
+    final (items, _) = await api.notifications();
+    expect(items.first.body, 'From Ada Obi (@ada_o): Suya');
+  });
 }

@@ -246,6 +246,36 @@ class HttpAvoraApi implements AvoraApi {
   Future<void> markNotificationsRead() => _call('POST', '/v1/me/notifications/read');
 
   @override
+  Future<Profile> profile() async => Profile.fromJson(await _call('GET', '/v1/me/profile'));
+
+  @override
+  Future<Profile> updateProfile({String name = '', String tag = ''}) async =>
+      Profile.fromJson(await _call('PATCH', '/v1/me/profile', body: {'name': name, 'tag': tag}));
+
+  @override
+  Future<Person> findPerson(String query) async =>
+      Person.fromJson(await _call('GET', '/v1/p2p/find', query: {'q': query}));
+
+  @override
+  Future<P2PTransfer> sendToAvora({
+    required String to,
+    required int amount,
+    required String note,
+    required String pin,
+    required String idempotencyKey,
+  }) async => P2PTransfer.fromJson(
+    await _call(
+      'POST',
+      '/v1/p2p',
+      body: {'to': to, 'amount': amount, 'note': note, 'pin': pin},
+      headers: {'Idempotency-Key': idempotencyKey},
+    ),
+  );
+
+  @override
+  Future<P2PTransfer> p2pTransfer(String id) async => P2PTransfer.fromJson(await _call('GET', '/v1/p2p/$id'));
+
+  @override
   Future<ReferralSummary> referrals() async => ReferralSummary.fromJson(await _call('GET', '/v1/me/referrals'));
 
   @override
