@@ -133,6 +133,9 @@ func TestFreeAllowanceThenFee(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.FreeTransfersPerMonth = 2
 	e := setup(t, cfg, 10_000_00)
+	if q, _ := e.svc.Quote(e.ctx, e.wallet, 100_00); q.Fee != 0 || q.FreeTransfersLeft != 2 {
+		t.Errorf("first quote = %+v", q)
+	}
 	var fees []int64
 	for _, k := range []string{"a", "b", "c"} {
 		tr, err := e.svc.Initiate(e.ctx, e.req(k, 100_00))
@@ -143,6 +146,10 @@ func TestFreeAllowanceThenFee(t *testing.T) {
 	}
 	if fees[0] != 0 || fees[1] != 0 || fees[2] != 10_00 {
 		t.Errorf("fees = %v, want [0 0 1000]", fees)
+	}
+	q, err := e.svc.Quote(e.ctx, e.wallet, 100_00)
+	if err != nil || q.Fee != 10_00 || q.Total != 110_00 || q.FreeTransfersLeft != 0 {
+		t.Errorf("quote after allowance = %+v %v", q, err)
 	}
 }
 
