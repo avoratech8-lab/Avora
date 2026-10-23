@@ -232,4 +232,42 @@ void main() {
     now = now.add(const Duration(days: 30));
     expect((await api.withdrawFromPot(short.id, idempotencyKey: 's2')).open, isFalse);
   });
+
+  test('a friend who joins with your code and verifies pays you once', () async {
+    final mine = await api.referrals();
+    expect(mine.code, startsWith('AV'));
+    await expectLater(
+      api.joinReferral(mine.code),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'own_code')),
+    );
+
+    await api.logout();
+    final c = await api.startOtp('08029998888');
+    await api.verify(challengeId: c, code: DemoAvoraApi.code, pin: '246810');
+    expect((await api.joinReferral(mine.code.toLowerCase())).joinedWith, mine.code);
+    await expectLater(
+      api.joinReferral(mine.code),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'code_used')),
+    );
+    await api.verifyKyc(kind: 'bvn', number: '22212345671');
+    await api.verifyKyc(kind: 'nin', number: '12345678901');
+
+    await api.logout();
+    final c2 = await api.startOtp('08031234567');
+    await api.verify(challengeId: c2, code: DemoAvoraApi.code, pin: '135790');
+    final after = await api.referrals();
+    expect(after.invited, 1);
+    expect(after.earned, DemoAvoraApi.referralReward);
+    expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit + DemoAvoraApi.referralReward);
+  });
+
+  test('the support assistant answers from the help centre', () async {
+    expect(await api.helpArticles(), hasLength(10));
+    final m = await api.sendSupportMessage('what are the transfer fees?');
+    expect(m, hasLength(2));
+    expect(m.last.sender, 'bot');
+    expect(m.last.body, startsWith('How much do transfers cost?'));
+    final h = await api.sendSupportMessage('I want to speak to an agent');
+    expect(h.last.body, contains('support team'));
+  });
 }

@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import '../app.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import 'help_screens.dart';
+import 'invite_screen.dart';
 import 'limits_screen.dart';
 import 'security_screens.dart';
 import 'shell_screen.dart';
@@ -122,6 +124,12 @@ class ProfileTab extends StatelessWidget {
             _Item(Icons.badge_outlined, 'Personal details', () => soon('Personal details', Icons.badge_outlined)),
             _Item(Icons.speed_rounded, 'Limits', () => go(const LimitsScreen()), key: const Key('limits')),
             _Item(Icons.description_outlined, 'Statements', () => soon('Statements', Icons.description_outlined)),
+            _Item(
+              Icons.card_giftcard_rounded,
+              'Invite friends',
+              () => go(const InviteScreen()),
+              key: const Key('invite'),
+            ),
           ]),
           _Section('Security', [
             _Item(
@@ -134,8 +142,18 @@ class ProfileTab extends StatelessWidget {
             _Item(Icons.devices_rounded, 'Phones signed in', () => go(const DevicesScreen())),
           ]),
           _Section('Help', [
-            _Item(Icons.support_agent_rounded, 'Chat with us', () => soon('Support chat', Icons.support_agent_rounded)),
-            _Item(Icons.help_outline_rounded, 'Help centre', () => soon('Help centre', Icons.help_outline_rounded)),
+            _Item(
+              Icons.support_agent_rounded,
+              'Chat with us',
+              () => go(const SupportChatScreen()),
+              key: const Key('chat'),
+            ),
+            _Item(
+              Icons.help_outline_rounded,
+              'Help centre',
+              () => go(const HelpCentreScreen()),
+              key: const Key('help'),
+            ),
             _Item(Icons.gavel_rounded, 'Terms and privacy', () => soon('Terms and privacy', Icons.gavel_rounded)),
           ]),
           const SizedBox(height: 20),

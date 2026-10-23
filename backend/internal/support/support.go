@@ -32,7 +32,7 @@ var Articles = []Article{
 	{ID: "transfer-pending", Topic: "Transfers", Title: "My transfer hasn't arrived",
 		Body: "Most transfers arrive in seconds. If the other bank is slow, your receipt says \"With the bank\" and we keep checking. " +
 			"If the bank declines it or doesn't confirm, the full amount and fee come back to your wallet automatically. You don't need to call anyone.",
-		keywords: []string{"transfer", "not arrived", "pending", "hasn't", "didn't receive", "delay", "stuck", "sent"}},
+		keywords: []string{"arrived", "pending", "didn't receive", "not received", "delay", "stuck", "where is my"}},
 	{ID: "transfer-fees", Topic: "Transfers", Title: "How much do transfers cost?",
 		Body:     "Your first 5 transfers each month are free. After that each transfer costs ₦10. The fee is always shown before you approve.",
 		keywords: []string{"fee", "charge", "cost", "free", "how much"}},

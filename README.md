@@ -19,6 +19,8 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - **KYC tiers and limits.** Phone-only accounts are Tier 1 (₦50,000 a day, ₦300,000 balance). A verified BVN or NIN gives Tier 2 (₦200,000 a day, ₦500,000 balance), and both give Tier 3 (₦5,000,000 a day, no balance cap). Transfers and bills since midnight Lagos time count toward the daily limit. `GET/POST /v1/me/kyc`; only the last 4 digits of an ID are kept. The tier amounts follow the published CBN tiers and must be confirmed with the partner bank. Sandbox: any 11-digit number is accepted except ones ending in 0.
 - **Security settings.** Change PIN (`POST /v1/me/pin`, which signs out other phones), check the PIN to unlock the app (`POST /v1/me/pin/verify`), and list or remove phones (`GET /v1/me/devices`, `DELETE /v1/me/devices/{id}`). The app sends `X-Device-Name` at sign-in so phones have names.
 - **Notifications.** Money received, transfers delivered, refunded or under review, bill refunds, new phone sign-ins, PIN changes and tier upgrades: `GET /v1/me/notifications` and `POST /v1/me/notifications/read`.
+- **Referrals.** Each customer gets an invite code (`GET /v1/me/referrals`). A friend can add it within 30 days of joining (`POST /v1/me/referrals`). When that friend first reaches Tier 2, the inviter is paid ₦500 from `system:referral_rewards`, once per friend. The amount is a placeholder until marketing sets a budget.
+- **Help centre and support chat.** `GET /v1/help/articles` serves the help articles. `GET/POST /v1/support/messages` is the chat: a bot answers from the articles and hands over to a person when asked or when it has no answer. Agents reply with `POST /v1/ops/support/{user_id}/reply` (ops key), which also notifies the customer.
 - **Fees.** 5 free transfers a month, then ₦10 each. These are placeholders until pricing is decided.
 - **Sandbox bank rail** for local development:
 
@@ -48,7 +50,7 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - Push notifications (the in-app inbox works; FCM/APNs delivery is not wired up).
 - A real bill aggregator in place of the bills sandbox, and requery for bill payments left pending.
 - Savings profit on average daily balance (month-end balance for now), once the partner bank confirms its method.
-- Support cases and the other features shown as "coming soon".
+- A support desk for agents (they reply through the ops API for now), and the other features shown as "coming soon" (cards, statements, personal details).
 - A release build of the app (signing key, icon, Play Store listing).
 
 ## The app
@@ -65,6 +67,10 @@ The Flutter app covers:
 - **Security:** fingerprint or face unlock, an app lock (immediately, after 1 or after 5 minutes away) with PIN fallback, fingerprint or face approval for payments, change PIN, and phones signed in. With biometrics on, the PIN is kept in the phone's Keystore/Keychain and only released after a fingerprint or face check, so the server still checks the PIN on every payment.
 - **Limits:** your KYC tier and what it allows, and BVN or NIN verification to move up.
 - **Notifications:** a bell with an unread count and an inbox that opens the matching receipt.
+- **Receive and request by QR:** Add money shows a QR code with your account. Request money adds an amount and a note, and shares a message that people on other banks can follow too.
+- **Scan to pay:** scan an Avora QR code (or any QR holding an account number) from Home and the bank, account, name, amount and note are filled in for you.
+- **Invite friends:** your code, how many friends joined and verified, what you've earned, and a place to add the code you were invited with.
+- **Help centre and chat:** searchable answers by topic and a chat where the assistant answers straight away and hands over to an agent.
 - **Me:** account details, tier, security and help.
 
 Bills sandbox rules: a meter or smartcard ending in 8 is not found, and any phone, meter or smartcard ending in 0 fails and is refunded. Data and TV prices are samples.
@@ -127,6 +133,12 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | POST | `/v1/me/kyc` | `{"type": "bvn" or "nin", "number"}` |
 | GET | `/v1/me/notifications` | Latest notifications and the unread count |
 | POST | `/v1/me/notifications/read` | Mark all as read |
+| GET | `/v1/me/referrals` | My invite code and rewards |
+| POST | `/v1/me/referrals` | `{"code"}`: the code I was invited with |
+| GET | `/v1/help/articles` | Help centre articles |
+| GET | `/v1/support/messages` | My support chat |
+| POST | `/v1/support/messages` | `{"body"}`; returns the chat with the assistant's answer |
+| POST | `/v1/ops/support/{user_id}/reply` | Agent reply; requires `X-Ops-Key` |
 | POST | `/v1/webhooks/inbound-credit` | Partner bank credit; requires `X-Signature` |
 | POST | `/v1/ops/transfers/{id}/resolve` | Close a `needs_review` transfer; requires `X-Ops-Key` |
 

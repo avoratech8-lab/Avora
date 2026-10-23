@@ -6,6 +6,7 @@ import '../ids.dart';
 import '../money.dart';
 import 'api.dart';
 import 'bill_catalog.dart';
+import 'help_catalog.dart';
 import 'models.dart';
 
 /// An in-memory stand-in for the backend, so the app can be tried with no
@@ -613,6 +614,7 @@ class DemoAvoraApi implements AvoraApi {
       u.nin = true;
     }
     final after = _tier(u);
+    if (before < 2 && after >= 2) _rewardReferrer(u);
     if (after > before) {
       _notify(
         u,
@@ -651,6 +653,86 @@ class DemoAvoraApi implements AvoraApi {
     }
   }
 
+  static const referralReward = 50000;
+
+  String _code(_DemoUser u) => 'AVDEMO${u.id.toString().padLeft(2, '0')}';
+
+  @override
+  Future<ReferralSummary> referrals() async {
+    final u = _me;
+    final invited = _users.values.where((x) => x.referrer == u).toList();
+    final rewarded = invited.where((x) => x.referralPaid).length;
+    return ReferralSummary(
+      code: _code(u),
+      reward: referralReward,
+      invited: invited.length,
+      rewarded: rewarded,
+      earned: rewarded * referralReward,
+      joinedWith: u.referrer == null ? '' : _code(u.referrer!),
+      canAddCode: u.referrer == null,
+    );
+  }
+
+  @override
+  Future<ReferralSummary> joinReferral(String code) async {
+    final u = _me;
+    final c = code.trim().toUpperCase();
+    if (c.isEmpty) throw ApiException('invalid_request', 'Enter a code.', status: 400);
+    final referrer = _users.values.where((x) => _code(x) == c).firstOrNull;
+    if (referrer == null) {
+      throw ApiException('unknown_code', "We don't recognise that invite code. Check it and try again.", status: 404);
+    }
+    if (referrer == u) {
+      throw ApiException('own_code', "That's your own invite code. Share it with friends instead.", status: 400);
+    }
+    if (u.referrer != null) {
+      throw ApiException('code_used', "You've already joined with an invite code.", status: 409);
+    }
+    u.referrer = referrer;
+    if (_tier(u) >= 2) _rewardReferrer(u);
+    return referrals();
+  }
+
+  void _rewardReferrer(_DemoUser u) {
+    final r = u.referrer;
+    if (r == null || u.referralPaid) return;
+    u.referralPaid = true;
+    r.balance += referralReward;
+    r.lines.add(
+      StatementLine(
+        kind: 'referral_reward',
+        description: 'Referral reward',
+        ref: '',
+        amount: referralReward,
+        at: _now(),
+      ),
+    );
+    _notify(
+      r,
+      'money_in',
+      '${formatNaira(referralReward)} referral reward',
+      'A friend you invited just verified their account. Thanks for spreading the word!',
+    );
+  }
+
+  @override
+  Future<List<HelpArticle>> helpArticles() async => demoHelpArticles();
+
+  @override
+  Future<List<SupportMessage>> supportMessages() async => List.of(_me.support);
+
+  @override
+  Future<List<SupportMessage>> sendSupportMessage(String body) async {
+    final u = _me;
+    final text = body.trim();
+    if (text.isEmpty) throw ApiException('invalid_request', 'Write a message.', status: 400);
+    u.support.add(SupportMessage(id: u.support.length + 1, sender: 'customer', body: text, createdAt: _now()));
+    u.support.add(
+      SupportMessage(id: u.support.length + 1, sender: 'bot', body: supportAnswer(text), createdAt: _now()),
+    );
+    return List.of(u.support);
+  }
+
   @override
   Future<void> logout() async {
     _tokens.remove(credentials.token);
@@ -668,6 +750,9 @@ class _DemoUser {
   bool bvn = false;
   bool nin = false;
   final devices = <Device>[];
+  final support = <SupportMessage>[];
+  _DemoUser? referrer;
+  bool referralPaid = false;
   final notifications = <AppNotification>[];
   final lines = <StatementLine>[];
   final transfers = <String, Transfer>{};

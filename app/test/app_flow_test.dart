@@ -2,7 +2,9 @@ import 'package:avora/src/api/demo_api.dart';
 import 'package:avora/src/api/models.dart';
 import 'package:avora/src/app.dart';
 import 'package:avora/src/credentials.dart';
+import 'package:avora/src/pay_code.dart';
 import 'package:avora/src/recipients.dart';
+import 'package:avora/src/screens/send_screen.dart';
 import 'package:avora/src/security.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -43,6 +45,9 @@ Future<void> openMe(WidgetTester tester, Key item) async {
   await tester.tap(find.text('Me'));
   await tester.pumpAndSettle();
   await tester.scrollUntilVisible(find.byKey(item), 200, scrollable: find.byType(Scrollable).last);
+  // Bring it clear of the navigation bar before tapping.
+  await tester.ensureVisible(find.byKey(item));
+  await tester.pumpAndSettle();
   await tester.tap(find.byKey(item));
   await tester.pumpAndSettle();
 }
@@ -396,5 +401,91 @@ void main() {
     await api.logout();
     await tester.pumpAndSettle();
     expect(security.biometricsOn, isFalse);
+  });
+
+  testWidgets('request money shows a QR code with the amount', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add money'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pay-qr')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('request-money')));
+    await tester.tap(find.byKey(const Key('request-money')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('request-amount')), '5,000');
+    await tester.enterText(find.byKey(const Key('request-note')), 'lunch');
+    await tester.pumpAndSettle();
+    expect(find.text('Scan with Avora to pay ₦5,000.00 for lunch'), findsOneWidget);
+  });
+
+  testWidgets('a scanned code fills in the account, name, amount and note', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    final nav = tester.state<NavigatorState>(find.byType(Navigator).first);
+    nav.push(
+      MaterialPageRoute<void>(
+        builder: (_) => const SendScreen(
+          payCode: PayCode(bankCode: '058', accountNumber: '0123456781', amount: 350000, note: 'Suya'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('GTBank'), findsOneWidget);
+    expect(find.text('DEMO USER 6781'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('next')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('3,500'), findsWidgets);
+    expect(find.text('Suya'), findsOneWidget);
+  });
+
+  testWidgets('help centre search, then chat with the assistant', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await openMe(tester, const Key('help'));
+    await tester.enterText(find.byKey(const Key('help-search')), 'PIN');
+    await tester.pumpAndSettle();
+    expect(find.text("I forgot my PIN or it's locked"), findsOneWidget);
+    expect(find.text('How much do transfers cost?'), findsNothing);
+
+    await tester.ensureVisible(find.byKey(const Key('open-chat')));
+    await tester.tap(find.byKey(const Key('open-chat')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('chat-input')), 'how do I raise my limit');
+    await tester.tap(find.byKey(const Key('chat-send')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Each account tier has a daily limit'), findsOneWidget);
+  });
+
+  testWidgets('invite friends shows your code and takes a friend\'s', (tester) async {
+    final (api, creds, recipients) = await demo();
+    final c = await api.startOtp('08020000001');
+    await api.verify(challengeId: c, code: DemoAvoraApi.code, pin: '135790');
+    final friendCode = (await api.referrals()).code;
+    await api.logout();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await openMe(tester, const Key('invite'));
+    expect(find.byKey(const Key('invite-code')), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('join-code')), 'AVNOPE00');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('join-submit')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("don't recognise"), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('join-code')), friendCode);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('join-submit')));
+    await tester.pumpAndSettle();
+    expect(find.text('You joined with $friendCode'), findsOneWidget);
   });
 }

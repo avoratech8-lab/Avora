@@ -392,3 +392,67 @@ class AppNotification {
   final DateTime createdAt;
   final bool read;
 }
+
+class ReferralSummary {
+  ReferralSummary({
+    required this.code,
+    required this.reward,
+    required this.invited,
+    required this.rewarded,
+    required this.earned,
+    required this.joinedWith,
+    required this.canAddCode,
+  });
+
+  factory ReferralSummary.fromJson(Map<String, dynamic> j) => ReferralSummary(
+    code: j['code'] as String,
+    reward: j['reward'] as int? ?? 0,
+    invited: j['invited'] as int? ?? 0,
+    rewarded: j['rewarded'] as int? ?? 0,
+    earned: j['earned'] as int? ?? 0,
+    joinedWith: j['joined_with'] as String? ?? '',
+    canAddCode: j['can_add_code'] as bool? ?? false,
+  );
+
+  final String code;
+  final int reward; // kobo per verified friend
+  final int invited;
+  final int rewarded;
+  final int earned; // kobo
+  final String joinedWith;
+  final bool canAddCode;
+}
+
+class HelpArticle {
+  const HelpArticle({required this.id, required this.topic, required this.title, required this.body});
+
+  factory HelpArticle.fromJson(Map<String, dynamic> j) => HelpArticle(
+    id: j['id'] as String,
+    topic: j['topic'] as String,
+    title: j['title'] as String,
+    body: j['body'] as String,
+  );
+
+  final String id;
+  final String topic;
+  final String title;
+  final String body;
+}
+
+class SupportMessage {
+  SupportMessage({required this.id, required this.sender, required this.body, required this.createdAt});
+
+  factory SupportMessage.fromJson(Map<String, dynamic> j) => SupportMessage(
+    id: j['id'] as int,
+    sender: j['sender'] as String,
+    body: j['body'] as String,
+    createdAt: DateTime.parse(j['created_at'] as String),
+  );
+
+  final int id;
+  final String sender; // customer, bot or agent
+  final String body;
+  final DateTime createdAt;
+
+  bool get mine => sender == 'customer';
+}

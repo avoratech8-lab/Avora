@@ -80,6 +80,17 @@ abstract class AvoraApi {
   Future<(List<AppNotification>, int)> notifications();
   Future<void> markNotificationsRead();
 
+  Future<ReferralSummary> referrals();
+
+  /// Records the invite code this customer joined with.
+  Future<ReferralSummary> joinReferral(String code);
+
+  Future<List<HelpArticle>> helpArticles();
+  Future<List<SupportMessage>> supportMessages();
+
+  /// Sends a chat message; the reply comes back with the conversation.
+  Future<List<SupportMessage>> sendSupportMessage(String body);
+
   Future<void> logout();
 }
 

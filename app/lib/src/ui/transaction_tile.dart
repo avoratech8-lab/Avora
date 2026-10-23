@@ -14,6 +14,7 @@ class TransactionTile extends StatelessWidget {
 
   static (IconData, Color) look(StatementLine line, ColorScheme scheme) => switch (line.kind) {
     'inbound_credit' => (Icons.south_west_rounded, Brand.green),
+    'referral_reward' => (Icons.card_giftcard_rounded, Brand.green),
     'transfer_refund' || 'bill_refund' => (Icons.replay_rounded, Brand.warning),
     'bill_payment' => (_billIcon(line.description), const Color(0xFF2563EB)),
     _ => (Icons.north_east_rounded, scheme.onSurfaceVariant),
