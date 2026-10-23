@@ -131,14 +131,9 @@ class Transfer {
   bool get isFinal => status == TransferStatus.delivered || status == TransferStatus.refunded;
 }
 
-enum BillCategory { airtime, data, electricity, tv }
+enum BillCategory { airtime, data, electricity, tv, internet, education, betting }
 
-BillCategory billCategory(String s) => switch (s) {
-  'airtime' => BillCategory.airtime,
-  'data' => BillCategory.data,
-  'electricity' => BillCategory.electricity,
-  _ => BillCategory.tv,
-};
+BillCategory billCategory(String s) => BillCategory.values.where((c) => c.name == s).firstOrNull ?? BillCategory.tv;
 
 class BillPlan {
   BillPlan({required this.code, required this.name, required this.amount});
@@ -151,8 +146,9 @@ class BillPlan {
   final int amount; // kobo
 }
 
-/// A network, DisCo or TV provider, with its fixed-price plans (data
-/// bundles, TV packages). Airtime and electricity take any amount.
+/// A network, DisCo, TV, internet, exam or betting provider, with its
+/// fixed-price plans (data bundles, TV packages, exam PINs). Airtime,
+/// electricity and betting take any amount.
 class Biller {
   Biller({
     required this.id,
@@ -162,7 +158,11 @@ class Biller {
     required this.plans,
     required this.minAmount,
     required this.maxAmount,
+    this.cashbackBps = 0,
   });
+
+  /// Cashback on one payment is capped at ₦500.
+  static const maxCashback = 50000;
 
   factory Biller.fromJson(Map<String, dynamic> j) => Biller(
     id: j['id'] as String,
@@ -172,6 +172,7 @@ class Biller {
     plans: [for (final p in (j['plans'] as List? ?? const [])) BillPlan.fromJson(p as Map<String, dynamic>)],
     minAmount: j['min_amount'] as int? ?? 0,
     maxAmount: j['max_amount'] as int? ?? 0,
+    cashbackBps: j['cashback_bps'] as int? ?? 0,
   );
 
   final String id;
@@ -181,9 +182,18 @@ class Biller {
   final List<BillPlan> plans;
   final int minAmount;
   final int maxAmount;
+  final int cashbackBps; // paid back once the biller confirms
 
   bool get hasPlans => plans.isNotEmpty;
-  bool get needsLookup => category == BillCategory.electricity || category == BillCategory.tv;
+
+  /// Paid to a phone number, with no name to check.
+  bool get byPhone => customerLabel == 'Phone number';
+  bool get needsLookup => !byPhone;
+
+  int cashback(int amount) => (amount * cashbackBps ~/ 10000).clamp(0, maxCashback);
+
+  /// "2%" or "2.5%".
+  String get cashbackRate => '${(cashbackBps / 100).toStringAsFixed(cashbackBps % 100 == 0 ? 0 : 1)}%';
 }
 
 enum BillStatus { success, pending, refunded }
@@ -198,6 +208,7 @@ class BillPayment {
     required this.customer,
     required this.customerName,
     required this.amount,
+    this.cashback = 0,
     required this.status,
     required this.token,
     required this.reference,
@@ -214,6 +225,7 @@ class BillPayment {
     customer: j['customer'] as String,
     customerName: j['customer_name'] as String? ?? '',
     amount: j['amount'] as int,
+    cashback: j['cashback'] as int? ?? 0,
     status: switch (j['status'] as String) {
       'success' => BillStatus.success,
       'refunded' => BillStatus.refunded,
@@ -233,8 +245,9 @@ class BillPayment {
   final String customer;
   final String customerName;
   final int amount;
+  final int cashback; // earned back; 0 if refunded
   final BillStatus status;
-  final String token; // electricity prepaid token
+  final String token; // electricity token or exam PIN
   final String reference;
   final String failureReason;
   final DateTime createdAt;

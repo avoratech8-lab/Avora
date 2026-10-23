@@ -10,7 +10,7 @@ VoidCallback? opener(BuildContext context, StatementLine line, Future<void> Func
   if (line.ref.isEmpty) return null;
   Widget? page;
   if (line.isTransfer) page = TransferScreen(transferId: line.ref);
-  if (line.kind.startsWith('bill_')) page = BillReceiptScreen(paymentId: line.ref);
+  if (line.kind.startsWith('bill_') || line.kind == 'cashback') page = BillReceiptScreen(paymentId: line.ref);
   if (line.kind.startsWith('p2p_')) page = P2PReceiptScreen(id: line.ref);
   if (page == null) return null;
   final p = page;

@@ -262,7 +262,7 @@ void main() {
   });
 
   test('the support assistant answers from the help centre', () async {
-    expect(await api.helpArticles(), hasLength(10));
+    expect(await api.helpArticles(), hasLength(11));
     final m = await api.sendSupportMessage('what are the transfer fees?');
     expect(m, hasLength(2));
     expect(m.last.sender, 'bot');
@@ -309,5 +309,34 @@ void main() {
     expect((got.outgoing, got.amount, got.note, got.other.handle), (false, 1500000, 'Suya', '@ada_o'));
     final (items, _) = await api.notifications();
     expect(items.first.body, 'From Ada Obi (@ada_o): Suya');
+  });
+
+  test('cashback on airtime and data only, capped, and none on a refund', () async {
+    Future<BillPayment> pay(String biller, String customer, int amount, {String? plan}) => api.payBill(
+      billerId: biller,
+      planCode: plan,
+      customer: customer,
+      amount: amount,
+      pin: '135790',
+      idempotencyKey: '$biller-$customer-$amount',
+    );
+    expect((await pay('mtn-airtime', '08031234567', 100000)).cashback, 2000); // 2% of ₦1,000
+    expect((await pay('glo-airtime', '08051234567', 3000000)).cashback, Biller.maxCashback);
+    expect((await pay('mtn-airtime', '08031234560', 100000)).cashback, 0); // declined
+    expect((await pay('dstv', '1234567891', 0, plan: 'dstv-padi')).cashback, 0);
+    expect(
+      (await api.wallet()).balance,
+      DemoAvoraApi.welcomeCredit - 100000 + 2000 - 3000000 + Biller.maxCashback - 440000,
+    );
+    final lines = await api.statement();
+    expect(lines.where((l) => l.kind == 'cashback').map((l) => l.description), [
+      'Cashback: Glo airtime · 08051234567',
+      'Cashback: MTN airtime · 08031234567',
+    ]);
+
+    final bet = await pay('bet9ja', 'BN48213', 50000);
+    expect((bet.status, bet.customerName, bet.cashback), (BillStatus.success, 'DEMO CUSTOMER 8213', 0));
+    final pin = await pay('jamb', '1234567891', 0, plan: 'jamb-utme');
+    expect(pin.token, hasLength(14));
   });
 }

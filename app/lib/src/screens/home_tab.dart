@@ -115,7 +115,7 @@ class _HomeTabState extends State<HomeTab> {
                 _Action('Data', Icons.wifi_rounded, () => _bills(BillCategory.data)),
                 _Action('Electricity', Icons.lightbulb_outline_rounded, () => _bills(BillCategory.electricity)),
                 _Action('TV', Icons.tv_rounded, () => _bills(BillCategory.tv)),
-
+                _Action('Betting', Icons.sports_soccer_rounded, () => _bills(BillCategory.betting)),
                 _Action('More', Icons.grid_view_rounded, () => _more(context)),
               ],
             ),
@@ -198,6 +198,8 @@ class _HomeTabState extends State<HomeTab> {
                 if (w != null) _go(RequestMoneyScreen(accountNumber: w.accountNumber));
               }),
               tile('Scan to pay', Icons.qr_code_scanner_rounded, () => _go(const ScanScreen())),
+              tile('Internet', Icons.router_rounded, () => _bills(BillCategory.internet)),
+              tile('Exam PINs: WAEC, NECO, JAMB', Icons.school_rounded, () => _bills(BillCategory.education)),
               tile('Refer and earn', Icons.card_giftcard_rounded, () => _go(const InviteScreen())),
               const SizedBox(height: 8),
             ],

@@ -271,8 +271,10 @@ class DemoAvoraApi implements AvoraApi {
   Future<String> validateBillCustomer({required String billerId, required String customer}) async {
     _me;
     final b = _biller(billerId);
-    final digits = RegExp(r'^\d{10,13}$').hasMatch(customer);
-    if (!digits || (b.needsLookup && customer.endsWith('8'))) {
+    final ok = b.category == BillCategory.betting
+        ? RegExp(r'^[A-Za-z0-9]{4,20}$').hasMatch(customer)
+        : RegExp(r'^\d{10,13}$').hasMatch(customer);
+    if (!ok || (b.needsLookup && customer.endsWith('8'))) {
       throw ApiException('customer_not_found', 'We could not find that ${b.customerLabel.toLowerCase()}.', status: 404);
     }
     return b.needsLookup ? 'DEMO CUSTOMER ${customer.substring(customer.length - 4)}' : '';
@@ -312,6 +314,7 @@ class DemoAvoraApi implements AvoraApi {
     final id = randomId();
     final failed = customer.endsWith('0');
     final what = billDescription(b, plan?.name ?? '', customer);
+    final cashback = failed ? 0 : b.cashback(amount);
     final pay = BillPayment(
       id: id,
       billerId: b.id,
@@ -321,14 +324,27 @@ class DemoAvoraApi implements AvoraApi {
       customer: customer,
       customerName: name,
       amount: amount,
+      cashback: cashback,
       status: failed ? BillStatus.refunded : BillStatus.success,
-      token: !failed && b.category == BillCategory.electricity ? _token() : '',
+      token: failed
+          ? ''
+          : switch (b.category) {
+              BillCategory.electricity => _token(),
+              BillCategory.education => _token(12),
+              _ => '',
+            },
       reference: 'DEMOBILL${id.substring(0, 10).toUpperCase()}',
       failureReason: failed ? 'biller declined' : '',
       createdAt: _now(),
     );
     u.balance -= amount;
     u.lines.add(StatementLine(kind: 'bill_payment', description: what, ref: id, amount: -amount, at: pay.createdAt));
+    if (cashback > 0) {
+      u.balance += cashback;
+      u.lines.add(
+        StatementLine(kind: 'cashback', description: 'Cashback: $what', ref: id, amount: cashback, at: _now()),
+      );
+    }
     if (failed) {
       _notify(
         u,
@@ -347,9 +363,9 @@ class DemoAvoraApi implements AvoraApi {
     return pay;
   }
 
-  String _token() {
-    final digits = randomId().codeUnits.map((c) => c % 10).take(20).join();
-    return [for (var i = 0; i < 20; i += 4) digits.substring(i, i + 4)].join('-');
+  String _token([int n = 20]) {
+    final digits = randomId().codeUnits.map((c) => c % 10).take(n).join();
+    return [for (var i = 0; i < n; i += 4) digits.substring(i, i + 4)].join('-');
   }
 
   @override
@@ -920,5 +936,7 @@ String billDescription(Biller b, String plan, String customer) => switch (b.cate
   BillCategory.airtime => '${b.name} airtime · $customer',
   BillCategory.data => '${b.name} data $plan · $customer',
   BillCategory.electricity => '${b.name} · meter $customer',
-  BillCategory.tv => '${b.name} $plan · $customer',
+  BillCategory.tv || BillCategory.internet => '${b.name} $plan · $customer',
+  BillCategory.education => '${b.name} $plan',
+  BillCategory.betting => '${b.name} top-up · $customer',
 };

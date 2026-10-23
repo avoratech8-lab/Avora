@@ -6,7 +6,8 @@ import '../dates.dart';
 import '../money.dart';
 import '../ui/receipt.dart';
 
-/// Receipt for an airtime, data, electricity or TV payment.
+/// Receipt for a bill payment: airtime, data, electricity, TV, internet,
+/// exam PINs or betting top-ups.
 class BillReceiptScreen extends StatefulWidget {
   const BillReceiptScreen({super.key, required this.paymentId, this.initial});
 
@@ -75,17 +76,23 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
           BillCategory.data => 'Data',
           BillCategory.electricity => 'Electricity',
           BillCategory.tv => 'TV',
+          BillCategory.internet => 'Internet',
+          BillCategory.education => 'Exam PIN',
+          BillCategory.betting => 'Betting top-up',
         },
       ),
       ('Provider', p.billerName),
       if (p.planName.isNotEmpty) ('Plan', p.planName),
       ('Number', p.customer),
       if (p.customerName.isNotEmpty) ('Name', p.customerName),
+      if (p.cashback > 0) ('Cashback', '+${formatNaira(p.cashback)} to your wallet'),
       ('Date', formatWhen(p.createdAt)),
       if (p.reference.isNotEmpty) ('Reference', p.reference),
       if (p.failureReason.isNotEmpty) ('Reason', p.failureReason),
     ];
-    final highlight = p.token.isEmpty ? null : ('Electricity token', p.token);
+    final highlight = p.token.isEmpty
+        ? null
+        : (p.category == BillCategory.education ? 'Your ${p.planName}' : 'Electricity token', p.token);
     return ReceiptView(
       tone: tone,
       title: title,
@@ -105,5 +112,8 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
     BillCategory.data => 'Data sent to ${p.customer}.',
     BillCategory.electricity => 'Type this token into your meter to load your units.',
     BillCategory.tv => 'Your subscription is active. It can take a few minutes to show on your TV.',
+    BillCategory.internet => 'Your ${p.billerName} plan is active.',
+    BillCategory.education => 'Here is your PIN. Keep it safe; you need it on the ${p.billerName} website.',
+    BillCategory.betting => 'Your ${p.billerName} wallet has been funded.',
   };
 }

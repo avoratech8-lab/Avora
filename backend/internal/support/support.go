@@ -56,10 +56,15 @@ var Articles = []Article{
 		Body: "Change your PIN now under Me → Security, which signs out your other phones, and remove any phone you don't know under " +
 			"Phones signed in. Then chat with an agent. Avora staff will never ask for your PIN or sign-in code.",
 		keywords: []string{"fraud", "hacked", "scam", "stolen", "someone else", "unauthorized", "unauthorised"}},
-	{ID: "bill-failed", Topic: "Bills", Title: "My airtime, data or electricity didn't come",
+	{ID: "bill-failed", Topic: "Bills", Title: "My airtime, data, electricity or other bill didn't come",
 		Body: "If the provider declines a payment, the full amount comes back to your wallet automatically and your receipt shows it. " +
-			"For electricity, the token is on the receipt; type it into your meter.",
-		keywords: []string{"airtime", "data", "electricity", "token", "meter", "dstv", "gotv", "startimes", "bill", "recharge"}},
+			"For electricity, the token is on the receipt; type it into your meter. Exam PINs are on the receipt too.",
+		keywords: []string{"airtime", "data", "electricity", "token", "meter", "dstv", "gotv", "startimes", "bill", "recharge",
+			"spectranet", "smile", "internet", "waec", "neco", "jamb", "pin", "betting", "bet9ja", "sportybet"}},
+	{ID: "cashback", Topic: "Bills", Title: "How does cashback work?",
+		Body: "You get 2% back on airtime and 3% back on data, up to ₦500 a payment. It lands in your wallet as soon as the network " +
+			"confirms, and shows on your receipt and in Activity. A payment that fails and is refunded earns no cashback.",
+		keywords: []string{"cashback", "cash back", "reward", "bonus", "percent"}},
 	{ID: "savings-profit", Topic: "Savings", Title: "How does interest-free savings work?",
 		Body: "Avora savings are non-interest. Your savings are invested with our partner bank under mudarabah, and you get a share of the " +
 			"profit it actually makes, paid after each month. The rates shown are expected, not promised. Goal pots can be emptied any time; " +

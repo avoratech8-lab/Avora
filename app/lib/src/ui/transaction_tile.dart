@@ -15,6 +15,7 @@ class TransactionTile extends StatelessWidget {
   static (IconData, Color) look(StatementLine line, ColorScheme scheme) => switch (line.kind) {
     'inbound_credit' => (Icons.south_west_rounded, Brand.green),
     'referral_reward' => (Icons.card_giftcard_rounded, Brand.green),
+    'cashback' => (Icons.savings_rounded, Brand.green),
     'p2p_in' => (Icons.bolt_rounded, Brand.green),
     'p2p_out' => (Icons.bolt_rounded, Brand.deepGreen),
     'transfer_refund' || 'bill_refund' => (Icons.replay_rounded, Brand.warning),
@@ -28,6 +29,9 @@ class TransactionTile extends StatelessWidget {
     if (s.contains('data')) return Icons.wifi_rounded;
     if (s.contains('electric') || s.contains('meter')) return Icons.bolt_rounded;
     if (RegExp(r'dstv|gotv|startimes|\btv\b').hasMatch(s)) return Icons.tv_rounded;
+    if (RegExp(r'spectranet|smile').hasMatch(s)) return Icons.router_rounded;
+    if (RegExp(r'waec|neco|jamb').hasMatch(s)) return Icons.school_rounded;
+    if (s.contains('top-up')) return Icons.sports_soccer_rounded;
     return Icons.receipt_long_rounded;
   }
 
