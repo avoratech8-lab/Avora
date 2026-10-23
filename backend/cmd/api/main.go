@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"avora/backend/internal/api"
+	"avora/backend/internal/auth"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
 	"avora/backend/internal/rails"
@@ -40,9 +41,9 @@ func run(log *slog.Logger) error {
 	if dbURL == "" {
 		return errors.New("DATABASE_URL is required")
 	}
-	secret := os.Getenv("WEBHOOK_SECRET")
-	if secret == "" {
-		return errors.New("WEBHOOK_SECRET is required")
+	secret, authSecret, opsKey := os.Getenv("WEBHOOK_SECRET"), os.Getenv("AUTH_SECRET"), os.Getenv("OPS_KEY")
+	if secret == "" || len(authSecret) < 32 || len(opsKey) < 32 {
+		return errors.New("WEBHOOK_SECRET, AUTH_SECRET (32+ chars) and OPS_KEY (32+ chars) are required")
 	}
 	addr := ":" + envOr("PORT", "8080")
 
@@ -61,13 +62,15 @@ func run(log *slog.Logger) error {
 
 	rail := rails.NewSandbox()
 	svc := transfers.NewService(pool, rail, sys, transfers.DefaultConfig())
+	authSvc := auth.NewService(pool, logSMS{log}, auth.DefaultConfig([]byte(authSecret)), sandboxNUBAN)
 	srv := &api.Server{
 		DB:            pool,
 		Rail:          rail,
 		System:        sys,
 		Transfers:     svc,
-		NewNUBAN:      sandboxNUBAN,
+		Auth:          authSvc,
 		WebhookSecret: secret,
+		OpsKey:        opsKey,
 		Log:           log,
 	}
 
@@ -109,6 +112,15 @@ func every(ctx context.Context, d time.Duration, f func()) {
 			f()
 		}
 	}
+}
+
+// logSMS writes codes to the log instead of texting them. Sandbox only:
+// production must use a real SMS/WhatsApp provider and never log codes.
+type logSMS struct{ log *slog.Logger }
+
+func (l logSMS) Send(_ context.Context, phone, msg string) error {
+	l.log.Warn("SANDBOX SMS", "to", phone, "message", msg)
+	return nil
 }
 
 // sandboxNUBAN stands in for the partner bank's account-number API.

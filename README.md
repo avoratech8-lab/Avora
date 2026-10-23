@@ -24,11 +24,20 @@ This repository holds the first version of the backend. The mobile app (Flutter)
   | 8 | Account not found |
   | anything else | Succeeds |
 
+- **Sign-up and login.**
+  - Sign-up uses a phone OTP and a 6-digit PIN. Codes expire after 5 minutes and allow 5 tries, with at most 3 codes per 10 minutes.
+  - Easy PINs such as 123456 or 000000 are rejected. Five wrong PINs lock the account for 30 minutes.
+- **Device binding.**
+  - A session works only from the phone it was created on.
+  - A newly added phone can send up to ₦20,000 in its first 24 hours.
+  - Every transfer needs the PIN.
+  - Customers can only see their own wallet and transfers.
+  - Ops routes need an ops key.
 - **Reconciliation.** `ledger.Check` runs every hour. It checks that all entries sum to zero and that every balance matches its entries.
 
 ## Not done yet (needed before real money)
 
-- User authentication, PIN and device binding. Today every route is open, so don't expose this server to the internet.
+- A real SMS/WhatsApp provider for OTPs. In the sandbox, codes are written to the server log.
 - A real partner bank rail (TAJBank or a BaaS provider) in place of the sandbox.
 - KYC tiers and transaction limits.
 - Bills, savings and support cases.
@@ -42,6 +51,8 @@ Requires Go 1.24 and Docker.
 docker compose up -d db
 export DATABASE_URL="postgres://avora:avora@localhost:5432/avora?sslmode=disable"
 export WEBHOOK_SECRET=dev-secret
+export AUTH_SECRET=$(openssl rand -hex 32)
+export OPS_KEY=$(openssl rand -hex 32)
 cd backend && go run ./cmd/api
 ```
 
@@ -56,22 +67,27 @@ cd backend && go test -race ./...
 
 All amounts are integer kobo (₦1 = 100).
 
+Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the session was created with.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/wallets` | Open a wallet: `{"user_ref": "..."}` |
-| GET | `/v1/wallets/{id}` | Wallet with balance |
-| GET | `/v1/wallets/{id}/statement` | Movements, newest first |
+| POST | `/v1/auth/otp` | `{"phone"}` texts a code and returns `challenge_id` |
+| POST | `/v1/auth/verify` | `{"challenge_id", "code", "pin"}` plus `X-Device-ID`; signs up or in and returns a token |
+| POST | `/v1/auth/logout` | End this session |
+| GET | `/v1/me/wallet` | My wallet and balance |
+| GET | `/v1/me/statement` | My movements, newest first |
 | POST | `/v1/name-enquiry` | `{"bank_code", "account_number"}` returns the account name |
-| POST | `/v1/transfers` | Send money; requires an `Idempotency-Key` header |
-| GET | `/v1/transfers/{id}` | Transfer status |
-| POST | `/v1/webhooks/inbound-credit` | Partner bank credit; `X-Signature` is required |
-| POST | `/v1/ops/transfers/{id}/resolve` | Close a `needs_review` transfer |
+| POST | `/v1/transfers` | `{"bank_code", "account_number", "amount", "narration", "pin"}`; requires an `Idempotency-Key` header |
+| GET | `/v1/transfers/{id}` | One of my transfers |
+| POST | `/v1/webhooks/inbound-credit` | Partner bank credit; requires `X-Signature` |
+| POST | `/v1/ops/transfers/{id}/resolve` | Close a `needs_review` transfer; requires `X-Ops-Key` |
 
 ## Layout
 
 ```
 backend/
   cmd/api            server entry point
+  internal/auth      OTP, PIN, devices and sessions
   internal/ledger    double-entry ledger and reconciliation check
   internal/wallets   wallets and system accounts
   internal/transfers transfer lifecycle, requery, refunds

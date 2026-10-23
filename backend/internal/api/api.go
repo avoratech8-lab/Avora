@@ -1,24 +1,31 @@
 // Package api exposes the backend over HTTP/JSON. All amounts are integer
 // kobo (₦1 = 100).
 //
-// Not yet production ready: there is no user authentication. Every route
-// except /healthz and the signed webhook must sit behind auth before launch.
+// Customer routes need "Authorization: Bearer <token>" and "X-Device-ID"
+// from the device the session was created on, and only ever see the
+// signed-in user's own wallet. Ops routes need X-Ops-Key. The inbound-credit
+// webhook is authenticated by its HMAC signature.
 package api
 
 import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"avora/backend/internal/auth"
 	"avora/backend/internal/inbound"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/rails"
@@ -31,53 +38,114 @@ type Server struct {
 	Rail          rails.Rail
 	System        wallets.System
 	Transfers     *transfers.Service
-	NewNUBAN      func(ctx context.Context, userRef string) (string, error) // issued by the partner bank
+	Auth          *auth.Service
 	WebhookSecret string
+	OpsKey        string
 	Log           *slog.Logger
+	Now           func() time.Time
 }
 
+type ctxKey struct{}
+
 func (s *Server) Handler() http.Handler {
+	if s.Now == nil {
+		s.Now = time.Now
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("POST /v1/wallets", s.createWallet)
-	mux.HandleFunc("GET /v1/wallets/{id}", s.getWallet)
-	mux.HandleFunc("GET /v1/wallets/{id}/statement", s.statement)
-	mux.HandleFunc("POST /v1/name-enquiry", s.nameEnquiry)
-	mux.HandleFunc("POST /v1/transfers", s.createTransfer)
-	mux.HandleFunc("GET /v1/transfers/{id}", s.getTransfer)
+
+	mux.HandleFunc("POST /v1/auth/otp", s.startOTP)
+	mux.HandleFunc("POST /v1/auth/verify", s.verifyOTP)
+	mux.HandleFunc("POST /v1/auth/logout", s.signedIn(s.logout))
+
+	mux.HandleFunc("GET /v1/me/wallet", s.signedIn(s.myWallet))
+	mux.HandleFunc("GET /v1/me/statement", s.signedIn(s.statement))
+	mux.HandleFunc("POST /v1/name-enquiry", s.signedIn(s.nameEnquiry))
+	mux.HandleFunc("POST /v1/transfers", s.signedIn(s.createTransfer))
+	mux.HandleFunc("GET /v1/transfers/{id}", s.signedIn(s.getTransfer))
+
 	mux.HandleFunc("POST /v1/webhooks/inbound-credit", s.inboundCredit)
-	mux.HandleFunc("POST /v1/ops/transfers/{id}/resolve", s.resolveTransfer)
+	mux.HandleFunc("POST /v1/ops/transfers/{id}/resolve", s.opsOnly(s.resolveTransfer))
 	return mux
 }
 
-func (s *Server) createWallet(w http.ResponseWriter, r *http.Request) {
+func (s *Server) signedIn(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		p, err := s.Auth.Authenticate(r.Context(), token, r.Header.Get("X-Device-ID"))
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
+	}
+}
+
+func principal(r *http.Request) auth.Principal {
+	return r.Context().Value(ctxKey{}).(auth.Principal)
+}
+
+func (s *Server) opsOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("X-Ops-Key")
+		if s.OpsKey == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.OpsKey)) != 1 {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "Ops key required.")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) startOTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		UserRef string `json:"user_ref"`
+		Phone string `json:"phone"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	nuban, err := s.NewNUBAN(r.Context(), body.UserRef)
+	id, err := s.Auth.StartOTP(r.Context(), body.Phone)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	wal, err := wallets.Create(r.Context(), s.DB, body.UserRef, nuban)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, wal)
+	writeJSON(w, http.StatusOK, map[string]string{"challenge_id": id})
 }
 
-func (s *Server) getWallet(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
+func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChallengeID string `json:"challenge_id"`
+		Code        string `json:"code"`
+		PIN         string `json:"pin"`
+	}
+	if !readJSON(w, r, &body) {
 		return
 	}
-	wal, err := wallets.Get(r.Context(), s.DB, id)
+	sess, err := s.Auth.Verify(r.Context(), auth.VerifyRequest{
+		ChallengeID: body.ChallengeID,
+		Code:        body.Code,
+		PIN:         body.PIN,
+		DeviceID:    r.Header.Get("X-Device-ID"),
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if err := s.Auth.Logout(r.Context(), token); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) myWallet(w http.ResponseWriter, r *http.Request) {
+	wal, err := wallets.Get(r.Context(), s.DB, principal(r).WalletID)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -86,21 +154,13 @@ func (s *Server) getWallet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) statement(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	if _, err := wallets.Get(r.Context(), s.DB, id); err != nil {
-		s.fail(w, err)
-		return
-	}
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
 			limit = n
 		}
 	}
-	lines, err := ledger.Statement(r.Context(), s.DB, id, limit)
+	lines, err := ledger.Statement(r.Context(), s.DB, principal(r).WalletID, limit)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -130,18 +190,36 @@ func (s *Server) nameEnquiry(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		WalletID      int64  `json:"wallet_id"`
 		BankCode      string `json:"bank_code"`
 		AccountNumber string `json:"account_number"`
 		Amount        int64  `json:"amount"`
 		Narration     string `json:"narration"`
+		PIN           string `json:"pin"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
+	p := principal(r)
+	if err := s.Auth.CheckPIN(r.Context(), p.UserID, body.PIN); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if ends := p.NewDeviceWindowEnds(s.Auth.Config()); s.Now().Before(ends) {
+		sent, err := s.Transfers.SentSince(r.Context(), p.WalletID, p.DeviceBoundAt)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if limit := s.Auth.Config().NewDeviceLimit; sent+body.Amount > limit {
+			writeError(w, http.StatusForbidden, "new_device_limit", fmt.Sprintf(
+				"For your safety, a newly added phone can send up to ₦%d in its first 24 hours. The limit lifts at %s.",
+				limit/100, ends.In(lagos).Format("3:04 PM on 2 Jan")))
+			return
+		}
+	}
 	t, err := s.Transfers.Initiate(r.Context(), transfers.InitiateRequest{
 		IdempotencyKey:  r.Header.Get("Idempotency-Key"),
-		WalletAccountID: body.WalletID,
+		WalletAccountID: p.WalletID,
 		BankCode:        body.BankCode,
 		AccountNumber:   body.AccountNumber,
 		Amount:          body.Amount,
@@ -154,8 +232,13 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
+var lagos = time.FixedZone("WAT", 60*60)
+
 func (s *Server) getTransfer(w http.ResponseWriter, r *http.Request) {
 	t, err := s.Transfers.Get(r.Context(), r.PathValue("id"))
+	if err == nil && t.WalletAccountID != principal(r).WalletID {
+		err = transfers.ErrNotFound // never reveal other users' transfers
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -209,10 +292,7 @@ func validSignature(secret string, body []byte, got string) bool {
 	if secret == "" {
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	want := hex.EncodeToString(mac.Sum(nil))
-	return hmac.Equal([]byte(want), []byte(got))
+	return hmac.Equal([]byte(Sign(secret, body)), []byte(got))
 }
 
 // Sign returns the X-Signature value for body; used by tests and the sandbox.
@@ -224,6 +304,18 @@ func Sign(secret string, body []byte) string {
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, auth.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Please sign in again.")
+	case errors.Is(err, auth.ErrWrongPIN):
+		writeError(w, http.StatusUnauthorized, "wrong_pin", "That PIN is wrong.")
+	case errors.Is(err, auth.ErrLocked):
+		writeError(w, http.StatusLocked, "pin_locked", "Too many wrong PINs. For your safety, try again in 30 minutes.")
+	case errors.Is(err, auth.ErrTooManyRequests):
+		writeError(w, http.StatusTooManyRequests, "too_many_codes", "Too many codes requested. Wait a few minutes and try again.")
+	case errors.Is(err, auth.ErrInvalidCode):
+		writeError(w, http.StatusUnauthorized, "invalid_code", "That code is wrong or has expired.")
+	case errors.Is(err, auth.ErrInvalidPhone), errors.Is(err, auth.ErrWeakPIN), errors.Is(err, auth.ErrInvalidDevice):
+		writeError(w, http.StatusBadRequest, "invalid_request", strings.TrimPrefix(err.Error(), "auth: "))
 	case errors.Is(err, ledger.ErrInsufficientFunds):
 		writeError(w, http.StatusUnprocessableEntity, "insufficient_funds", "Your balance is too low for this transfer and its fee.")
 	case errors.Is(err, transfers.ErrInvalid), errors.Is(err, inbound.ErrInvalid):
@@ -232,23 +324,12 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
 	case errors.Is(err, transfers.ErrNotResolvable):
 		writeError(w, http.StatusConflict, "not_resolvable", err.Error())
-	case errors.Is(err, wallets.ErrExists):
-		writeError(w, http.StatusConflict, "wallet_exists", "This user already has a wallet.")
 	case errors.Is(err, wallets.ErrNotFound), errors.Is(err, transfers.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Not found.")
 	default:
 		s.Log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Something went wrong on our side. No money was lost; please try again.")
 	}
-}
-
-func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Not found.")
-		return 0, false
-	}
-	return id, true
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

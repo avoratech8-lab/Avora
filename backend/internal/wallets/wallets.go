@@ -65,17 +65,25 @@ type Wallet struct {
 
 // Create opens a wallet. The NUBAN comes from the partner bank.
 func Create(ctx context.Context, pool *pgxpool.Pool, userRef, nuban string) (Wallet, error) {
-	if userRef == "" || len(nuban) != 10 {
-		return Wallet{}, errors.New("wallets: user ref and a 10-digit account number are required")
-	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return Wallet{}, err
 	}
 	defer tx.Rollback(ctx)
+	w, err := CreateTx(ctx, tx, userRef, nuban)
+	if err != nil {
+		return Wallet{}, err
+	}
+	return w, tx.Commit(ctx)
+}
 
+// CreateTx opens a wallet inside the caller's transaction.
+func CreateTx(ctx context.Context, tx pgx.Tx, userRef, nuban string) (Wallet, error) {
+	if userRef == "" || len(nuban) != 10 {
+		return Wallet{}, errors.New("wallets: user ref and a 10-digit account number are required")
+	}
 	w := Wallet{UserRef: userRef, NUBAN: nuban}
-	err = tx.QueryRow(ctx, `insert into accounts (code, kind) values ($1, 'liability') returning id`,
+	err := tx.QueryRow(ctx, `insert into accounts (code, kind) values ($1, 'liability') returning id`,
 		"wallet:"+userRef).Scan(&w.AccountID)
 	if err == nil {
 		_, err = tx.Exec(ctx, `insert into wallets (account_id, user_ref, nuban) values ($1, $2, $3)`,
@@ -85,10 +93,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, userRef, nuban string) (Wal
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return Wallet{}, ErrExists
 	}
-	if err != nil {
-		return Wallet{}, err
-	}
-	return w, tx.Commit(ctx)
+	return w, err
 }
 
 func Get(ctx context.Context, db ledger.DB, accountID int64) (Wallet, error) {
