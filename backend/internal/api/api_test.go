@@ -27,6 +27,8 @@ import (
 	"avora/backend/internal/rails"
 	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/schedules"
+	"avora/backend/internal/splits"
 	"avora/backend/internal/support"
 	"avora/backend/internal/testdb"
 	"avora/backend/internal/transfers"
@@ -72,7 +74,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	acfg := auth.DefaultConfig([]byte("auth-secret-auth-secret-auth-secret"))
 	acfg.BcryptCost = bcrypt.MinCost
 	sms := &fakeSMS{}
-	nubans := []string{"9000000001", "9000000002"}
+	nubans := []string{"9000000001", "9000000002", "9000000003", "9000000004"}
 	sav, err := savings.NewService(ctx, pool, savings.DefaultRates())
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +92,8 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 		Support:   support.NewService(pool),
 		P2P:       p2p.NewService(pool),
 		Insights:  insights.NewService(pool),
+		Schedules: schedules.NewService(pool),
+		Splits:    splits.NewService(pool),
 		Cards:     cards.NewService(pool, sys, []byte("card-secret")),
 		Sandbox:   true,
 		DB:        pool, Rail: rail, System: sys,
@@ -788,5 +792,182 @@ func TestCardsAndRoundUps(t *testing.T) {
 	}
 	if _, list := ada.call("GET", "/v1/cards", nil, nil); len(list["cards"].([]any)) != 0 || list["max"] != float64(3) {
 		t.Errorf("cards after terminate: %v", list)
+	}
+}
+
+func TestScheduledPayments(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 20_000_00)
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08021234567", "593816")
+	bola.call("PATCH", "/v1/me/profile", map[string]string{"name": "Bola", "tag": "bola"}, nil)
+
+	create := func(body map[string]any) (int, map[string]any) {
+		t.Helper()
+		body["pin"] = "482915"
+		return ada.call("POST", "/v1/schedules", body, nil)
+	}
+	if code, _ := create(map[string]any{"kind": "avora", "name": "Rent", "amount": 1_000_00, "frequency": "yearly",
+		"target": map[string]any{"to": "@bola"}}); code != http.StatusBadRequest {
+		t.Errorf("bad frequency: %d", code)
+	}
+	if code, _ := create(map[string]any{"kind": "avora", "name": "Rent", "amount": 1_000_00, "frequency": "weekly",
+		"target": map[string]any{"to": "@nobody"}}); code != http.StatusNotFound {
+		t.Errorf("unknown payee: %d", code)
+	}
+	if code, _ := create(map[string]any{"kind": "transfer", "name": "Mum", "amount": 1_000_00, "frequency": "monthly",
+		"target": map[string]any{"bank_code": "058", "account_number": "0123456788"}}); code != http.StatusNotFound {
+		t.Errorf("unknown account: %d", code)
+	}
+
+	code, pocket := create(map[string]any{"kind": "avora", "name": "Pocket money", "amount": 3_000_00, "frequency": "weekly",
+		"target": map[string]any{"to": "@BOLA"}})
+	if code != http.StatusOK || pocket["status"] != "active" || pocket["target"].(map[string]any)["to"] != "@bola" ||
+		pocket["target"].(map[string]any)["account_name"] != "Bola" {
+		t.Fatalf("create: %d %v", code, pocket)
+	}
+	run := func(id string) map[string]any {
+		t.Helper()
+		code, sc := ada.call("POST", "/v1/sandbox/schedules/"+id+"/run", nil, nil)
+		if code != http.StatusOK {
+			t.Fatalf("run: %d %v", code, sc)
+		}
+		return sc
+	}
+	sc := run(pocket["id"].(string))
+	if sc["last_ok"] != true || sc["runs"] != float64(1) || sc["next_run"] == pocket["next_run"] {
+		t.Errorf("after a run: %v", sc)
+	}
+	if _, w := bola.call("GET", "/v1/me/wallet", nil, nil); w["balance"] != float64(3_000_00) {
+		t.Errorf("bola balance = %v", w["balance"])
+	}
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["kind"] != "schedule" ||
+		first["title"] != "Scheduled: ₦3,000.00 for Pocket money" {
+		t.Errorf("notification = %v", first)
+	}
+
+	_, pot := ada.call("POST", "/v1/savings", map[string]any{"kind": "goal", "name": "Laptop"}, map[string]string{"Idempotency-Key": "pot"})
+	code, save := create(map[string]any{"kind": "savings", "name": "Laptop", "amount": 2_000_00, "frequency": "daily",
+		"target": map[string]any{"pot_id": pot["id"]}})
+	if code != http.StatusOK {
+		t.Fatalf("savings schedule: %d %v", code, save)
+	}
+	if sc := run(save["id"].(string)); sc["last_ok"] != true {
+		t.Errorf("save: %v", sc)
+	}
+
+	// The balance is now ₦14,950: too little for ₦40,000, which is also under the ₦50,000 limit.
+	_, big := create(map[string]any{"kind": "avora", "name": "Car", "amount": 40_000_00, "frequency": "once",
+		"target": map[string]any{"to": "@bola"}})
+	if sc := run(big["id"].(string)); sc["last_ok"] != false || sc["last_message"] != "Your balance was too low." || sc["status"] != "done" {
+		t.Errorf("short: %v", sc)
+	}
+	_, n = ada.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["title"] != "Car didn't go" {
+		t.Errorf("failure notification = %v", first)
+	}
+	credit(t, srv, "S2", "9000000001", 60_000_00)
+	_, huge := create(map[string]any{"kind": "transfer", "name": "Landlord", "amount": 49_000_00, "frequency": "monthly",
+		"target": map[string]any{"bank_code": "058", "account_number": "0123456781"}})
+	if sc := run(huge["id"].(string)); sc["last_ok"] != false || !strings.HasPrefix(sc["last_message"].(string), "Tier 1 accounts") {
+		t.Errorf("over the limit: %v", sc)
+	}
+
+	id := pocket["id"].(string)
+	if code, sc := ada.call("POST", "/v1/schedules/"+id+"/pause", map[string]any{"paused": true}, nil); code != http.StatusOK || sc["status"] != "paused" {
+		t.Errorf("pause: %d %v", code, sc)
+	}
+	if code, _ := ada.call("POST", "/v1/sandbox/schedules/"+id+"/run", nil, nil); code == http.StatusOK {
+		t.Errorf("ran a paused schedule")
+	}
+	if code, _ := bola.call("DELETE", "/v1/schedules/"+id, nil, nil); code != http.StatusNotFound {
+		t.Errorf("someone else's schedule: %d", code)
+	}
+	if code, _ := ada.call("DELETE", "/v1/schedules/"+id, nil, nil); code != http.StatusNoContent {
+		t.Errorf("cancel: %d", code)
+	}
+	if _, list := ada.call("GET", "/v1/schedules", nil, nil); len(list["schedules"].([]any)) != 3 {
+		t.Errorf("list = %v", list)
+	}
+}
+
+func TestSplitBills(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	ada.call("PATCH", "/v1/me/profile", map[string]string{"name": "Ada", "tag": "ada"}, nil)
+	bola := &client{t: t, srv: srv, sms: sms, device: "bola-phone"}
+	bola.signIn("08021234567", "593816")
+	credit(t, srv, "S1", "9000000002", 10_000_00)
+	bola.call("PATCH", "/v1/me/profile", map[string]string{"name": "Bola", "tag": "bola"}, nil)
+	chidi := &client{t: t, srv: srv, sms: sms, device: "chidi-phone"}
+	chidi.signIn("08051234567", "604817")
+	chidi.call("PATCH", "/v1/me/profile", map[string]string{"name": "Chidi", "tag": "chidi"}, nil)
+
+	split := func(people ...map[string]any) (int, map[string]any) {
+		return ada.call("POST", "/v1/splits", map[string]any{"title": "Dinner", "total": 9_000_00, "people": people}, nil)
+	}
+	if code, _ := split(map[string]any{"to": "@bola", "amount": 6_000_00}, map[string]any{"to": "@chidi", "amount": 6_000_00}); code != http.StatusBadRequest {
+		t.Errorf("shares over the total: %d", code)
+	}
+	if code, _ := split(map[string]any{"to": "@bola", "amount": 1_000_00}, map[string]any{"to": "@bola", "amount": 1_000_00}); code != http.StatusBadRequest {
+		t.Errorf("asked twice: %d", code)
+	}
+	code, sp := split(map[string]any{"to": "@bola", "amount": 3_000_00}, map[string]any{"to": "0805 123 4567", "amount": 3_000_00})
+	if code != http.StatusOK || len(sp["shares"].([]any)) != 2 || sp["mine"] != true {
+		t.Fatalf("split: %d %v", code, sp)
+	}
+	id := sp["id"].(string)
+
+	_, n := bola.call("GET", "/v1/me/notifications", nil, nil)
+	if first := n["notifications"].([]any)[0].(map[string]any); first["kind"] != "split" || first["ref"] != id {
+		t.Errorf("bola's notification = %v", first)
+	}
+	if code, _ := bola.call("POST", "/v1/splits/"+id+"/pay", map[string]any{"pin": "000001"}, nil); code != http.StatusUnauthorized {
+		t.Errorf("wrong PIN: %d", code)
+	}
+	code, paid := bola.call("POST", "/v1/splits/"+id+"/pay", map[string]any{"pin": "593816"}, nil)
+	if code != http.StatusOK || paid["collected"] != float64(3_000_00) || paid["mine"] != false {
+		t.Fatalf("pay: %d %v", code, paid)
+	}
+	if code, _ := bola.call("POST", "/v1/splits/"+id+"/pay", map[string]any{"pin": "593816"}, nil); code != http.StatusConflict {
+		t.Errorf("paid twice: %d", code)
+	}
+	if code, _ := chidi.call("POST", "/v1/splits/"+id+"/decline", nil, nil); code != http.StatusOK {
+		t.Errorf("decline: %d", code)
+	}
+	if _, w := ada.call("GET", "/v1/me/wallet", nil, nil); w["balance"] != float64(3_000_00) {
+		t.Errorf("ada balance = %v", w["balance"])
+	}
+	_, n = ada.call("GET", "/v1/me/notifications", nil, nil)
+	var titles []string
+	for _, x := range n["notifications"].([]any) {
+		if m := x.(map[string]any); m["kind"] == "split" {
+			titles = append(titles, m["title"].(string))
+		}
+	}
+	if len(titles) != 2 {
+		t.Errorf("ada's split notifications = %v", titles)
+	}
+	_, got := ada.call("GET", "/v1/splits/"+id, nil, nil)
+	statuses := map[string]any{}
+	for _, x := range got["shares"].([]any) {
+		m := x.(map[string]any)
+		statuses[m["tag"].(string)] = m["status"]
+	}
+	if statuses["bola"] != "paid" || statuses["chidi"] != "declined" {
+		t.Errorf("shares = %v", statuses)
+	}
+	if _, list := chidi.call("GET", "/v1/splits", nil, nil); len(list["splits"].([]any)) != 1 {
+		t.Errorf("chidi's list = %v", list)
+	}
+
+	other := &client{t: t, srv: srv, sms: sms, device: "dayo-phone"}
+	other.signIn("08099999999", "570264")
+	if code, _ := other.call("GET", "/v1/splits/"+id, nil, nil); code != http.StatusNotFound {
+		t.Errorf("outsider: %d", code)
 	}
 }

@@ -143,6 +143,10 @@ func (s *Service) Find(ctx context.Context, viewerID int64, q string) (Person, e
 	return p, nil
 }
 
+// UserID and WalletID say who a found person is, for other services.
+func (p Person) UserID() int64   { return p.userID }
+func (p Person) WalletID() int64 { return p.walletID }
+
 // mask turns +2348031234567 into 0803 *** 4567.
 func mask(phone string) string {
 	if len(phone) != 14 {

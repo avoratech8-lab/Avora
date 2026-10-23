@@ -38,6 +38,8 @@ import (
 	"avora/backend/internal/rails"
 	"avora/backend/internal/referrals"
 	"avora/backend/internal/savings"
+	"avora/backend/internal/schedules"
+	"avora/backend/internal/splits"
 	"avora/backend/internal/support"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
@@ -55,6 +57,8 @@ type Server struct {
 	P2P       *p2p.Service
 	Insights  *insights.Service
 	Cards     *cards.Service
+	Schedules *schedules.Service
+	Splits    *splits.Service
 	// Sandbox turns on test-only routes, such as making a card payment.
 	Sandbox       bool
 	Support       *support.Service
@@ -104,8 +108,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/cards/{id}/details", s.signedIn(s.cardDetails))
 	mux.HandleFunc("POST /v1/cards/{id}/terminate", s.signedIn(s.terminateCard))
 	mux.HandleFunc("GET /v1/cards/{id}/payments", s.signedIn(s.cardPayments))
+	mux.HandleFunc("GET /v1/schedules", s.signedIn(s.listSchedules))
+	mux.HandleFunc("POST /v1/schedules", s.signedIn(s.createSchedule))
+	mux.HandleFunc("POST /v1/schedules/{id}/pause", s.signedIn(s.pauseSchedule))
+	mux.HandleFunc("DELETE /v1/schedules/{id}", s.signedIn(s.cancelSchedule))
+	mux.HandleFunc("GET /v1/splits", s.signedIn(s.listSplits))
+	mux.HandleFunc("POST /v1/splits", s.signedIn(s.createSplit))
+	mux.HandleFunc("GET /v1/splits/{id}", s.signedIn(s.getSplit))
+	mux.HandleFunc("POST /v1/splits/{id}/pay", s.signedIn(s.paySplit))
+	mux.HandleFunc("POST /v1/splits/{id}/decline", s.signedIn(s.declineSplit))
 	if s.Sandbox {
 		mux.HandleFunc("POST /v1/sandbox/cards/{id}/charge", s.signedIn(s.sandboxCharge))
+		mux.HandleFunc("POST /v1/sandbox/schedules/{id}/run", s.signedIn(s.sandboxRunSchedule))
 	}
 	mux.HandleFunc("GET /v1/p2p/find", s.signedIn(s.findPerson))
 	mux.HandleFunc("POST /v1/p2p", s.signedIn(s.sendP2P))
@@ -312,58 +326,71 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.afterSpend(r, p.WalletID, t.ID, t.Amount)
+	s.afterSpend(r.Context(), p.WalletID, t.ID, t.Amount)
 	writeJSON(w, http.StatusOK, t)
 }
 
 var lagos = time.FixedZone("WAT", 60*60)
+
+// limitError is a payment refused by a limit, with a message to show.
+type limitError struct{ code, msg string }
+
+func (e *limitError) Error() string { return e.msg }
+
+// spentSince totals transfers, bills and Avora transfers since t.
+func (s *Server) spentSince(ctx context.Context, wallet int64, t time.Time) (int64, error) {
+	sent, err := s.Transfers.SentSince(ctx, wallet, t)
+	if err != nil || s.Bills == nil {
+		return sent, err
+	}
+	paid, err := s.Bills.SpentSince(ctx, wallet, t)
+	if err != nil || s.P2P == nil {
+		return sent + paid, err
+	}
+	toAvora, err := s.P2P.SentSince(ctx, wallet, t)
+	return sent + paid + toAvora, err
+}
+
+// dailyLimit refuses a payment that would take today's spending past the
+// customer's KYC tier limit.
+func (s *Server) dailyLimit(ctx context.Context, userID, wallet, amount int64) error {
+	if s.KYC == nil {
+		return nil
+	}
+	st, err := s.KYC.Status(ctx, userID)
+	if err != nil {
+		return err
+	}
+	now := s.Now().In(lagos)
+	today, err := s.spentSince(ctx, wallet, time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, lagos))
+	if err != nil {
+		return err
+	}
+	if today+amount > st.Limits.DailySend {
+		msg := fmt.Sprintf("Tier %d accounts can send up to %s a day, and you have %s left today.",
+			st.Tier, notify.Naira(st.Limits.DailySend), notify.Naira(max(0, st.Limits.DailySend-today)))
+		if st.Tier < 3 {
+			msg += " Verify your BVN or NIN under Me → Limits to raise it."
+		}
+		return &limitError{"daily_limit", msg}
+	}
+	return nil
+}
 
 // withinLimits applies the KYC tier's daily send limit and, for a newly
 // added phone, the first-24-hours cap. Transfers and bills count together.
 // It writes the error when it fails.
 func (s *Server) withinLimits(w http.ResponseWriter, r *http.Request, p auth.Principal, amount int64) bool {
 	ctx := r.Context()
-	spentSince := func(t time.Time) (int64, error) {
-		sent, err := s.Transfers.SentSince(ctx, p.WalletID, t)
-		if err != nil || s.Bills == nil {
-			return sent, err
-		}
-		paid, err := s.Bills.SpentSince(ctx, p.WalletID, t)
-		if err != nil || s.P2P == nil {
-			return sent + paid, err
-		}
-		toAvora, err := s.P2P.SentSince(ctx, p.WalletID, t)
-		return sent + paid + toAvora, err
+	if err := s.dailyLimit(ctx, p.UserID, p.WalletID, amount); err != nil {
+		s.fail(w, err)
+		return false
 	}
-
-	if s.KYC != nil {
-		st, err := s.KYC.Status(ctx, p.UserID)
-		if err != nil {
-			s.fail(w, err)
-			return false
-		}
-		now := s.Now().In(lagos)
-		today, err := spentSince(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, lagos))
-		if err != nil {
-			s.fail(w, err)
-			return false
-		}
-		if today+amount > st.Limits.DailySend {
-			msg := fmt.Sprintf("Tier %d accounts can send up to %s a day, and you have %s left today.",
-				st.Tier, notify.Naira(st.Limits.DailySend), notify.Naira(max(0, st.Limits.DailySend-today)))
-			if st.Tier < 3 {
-				msg += " Verify your BVN or NIN under Me → Limits to raise it."
-			}
-			writeError(w, http.StatusForbidden, "daily_limit", msg)
-			return false
-		}
-	}
-
 	ends := p.NewDeviceWindowEnds(s.Auth.Config())
 	if !s.Now().Before(ends) {
 		return true
 	}
-	since, err := spentSince(p.DeviceBoundAt)
+	since, err := s.spentSince(ctx, p.WalletID, p.DeviceBoundAt)
 	if err != nil {
 		s.fail(w, err)
 		return false
@@ -528,7 +555,7 @@ func (s *Server) sendP2P(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.afterSpend(r, p.WalletID, t.ID, t.Amount)
+	s.afterSpend(r.Context(), p.WalletID, t.ID, t.Amount)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -672,7 +699,7 @@ func (s *Server) payBill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pay.Status != bills.Refunded {
-		s.afterSpend(r, p.WalletID, pay.ID, pay.Amount)
+		s.afterSpend(r.Context(), p.WalletID, pay.ID, pay.Amount)
 	}
 	writeJSON(w, http.StatusOK, pay)
 }
@@ -680,11 +707,11 @@ func (s *Server) payBill(w http.ResponseWriter, r *http.Request) {
 // afterSpend saves the round-up from a payment and tells the customer when
 // it takes a budget past 80% or 100%. The payment has already gone through,
 // so a failure here is logged, not returned.
-func (s *Server) afterSpend(r *http.Request, wallet int64, ref string, amount int64) {
-	if _, err := s.Savings.RoundUp(r.Context(), wallet, ref, amount); err != nil {
+func (s *Server) afterSpend(ctx context.Context, wallet int64, ref string, amount int64) {
+	if _, err := s.Savings.RoundUp(ctx, wallet, ref, amount); err != nil {
 		s.Log.Error("round-up", "wallet", wallet, "ref", ref, "err", err)
 	}
-	if err := s.Insights.Alert(r.Context(), wallet); err != nil {
+	if err := s.Insights.Alert(ctx, wallet); err != nil {
 		s.Log.Error("budget alerts", "wallet", wallet, "err", err)
 	}
 }
@@ -840,7 +867,7 @@ func (s *Server) sandboxCharge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pay.Status == "approved" {
-		s.afterSpend(r, p.WalletID, pay.ID, pay.Amount)
+		s.afterSpend(r.Context(), p.WalletID, pay.ID, pay.Amount)
 	}
 	writeJSON(w, http.StatusOK, pay)
 }
@@ -1063,7 +1090,10 @@ func Sign(secret string, body []byte) string {
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
+	var limit *limitError
 	switch {
+	case errors.As(err, &limit):
+		writeError(w, http.StatusForbidden, limit.code, limit.msg)
 	case errors.Is(err, auth.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Please sign in again.")
 	case errors.Is(err, auth.ErrWrongPIN):
@@ -1099,6 +1129,14 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "code_used", "You've already joined with an invite code.")
 	case errors.Is(err, referrals.ErrTooLate):
 		writeError(w, http.StatusConflict, "code_too_late", "Invite codes can only be added in your first 30 days.")
+	case errors.Is(err, schedules.ErrNotFound):
+		writeError(w, http.StatusNotFound, "schedule_not_found", "We couldn't find that scheduled payment.")
+	case errors.Is(err, splits.ErrNotFound):
+		writeError(w, http.StatusNotFound, "split_not_found", "We couldn't find that request.")
+	case errors.Is(err, splits.ErrSettled):
+		writeError(w, http.StatusConflict, "split_settled", "You've already paid or declined this.")
+	case errors.Is(err, schedules.ErrInvalid), errors.Is(err, splits.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request", friendly(err))
 	case errors.Is(err, cards.ErrNotFound):
 		writeError(w, http.StatusNotFound, "card_not_found", "We couldn't find that card.")
 	case errors.Is(err, cards.ErrTooMany):
