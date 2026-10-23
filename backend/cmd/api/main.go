@@ -18,9 +18,11 @@ import (
 
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
+	"avora/backend/internal/bills"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/migrate"
 	"avora/backend/internal/rails"
+	"avora/backend/internal/savings"
 	"avora/backend/internal/transfers"
 	"avora/backend/internal/wallets"
 )
@@ -63,11 +65,17 @@ func run(log *slog.Logger) error {
 	rail := rails.NewSandbox()
 	svc := transfers.NewService(pool, rail, sys, transfers.DefaultConfig())
 	authSvc := auth.NewService(pool, logSMS{log}, auth.DefaultConfig([]byte(authSecret)), sandboxNUBAN)
+	savingsSvc, err := savings.NewService(ctx, pool, savings.DefaultRates())
+	if err != nil {
+		return err
+	}
 	srv := &api.Server{
 		DB:            pool,
 		Rail:          rail,
 		System:        sys,
 		Transfers:     svc,
+		Bills:         bills.NewService(pool, bills.Sandbox{}, sys),
+		Savings:       savingsSvc,
 		Auth:          authSvc,
 		WebhookSecret: secret,
 		OpsKey:        opsKey,

@@ -14,6 +14,8 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
   - A transfer is sent once and never resent. If the bank doesn't answer, it is requeried on a backoff (1, 2, 5, 10, 30 then 60 minutes).
   - A decline is refunded in full, including the fee.
   - A transfer with no answer after 6 hours goes to `needs_review` for the ops team.
+- **Bills.** Airtime, data, electricity and TV through `GET /v1/bills/billers`, `POST /v1/bills/validate` and `POST /v1/bills/payments` (PIN and `Idempotency-Key` required). The money is held, then settled, or refunded in full if the biller declines. Bills count toward the new-phone limit.
+- **Savings.** Non-interest (mudarabah) pots, each its own ledger account: `GET/POST /v1/savings`, `POST /v1/savings/{id}/deposit` and `/withdraw`. Profit is shared after each month at the rate the partner bank declares: `POST /v1/ops/savings/profit` with `{"period": "2026-10", "goal_rate_bps": 800, "locked_rate_bps": 1200}` (each month once). Expected rates (8% goals; 10 to 16% locked) are placeholders until the bank publishes its profit-sharing ratios.
 - **Fees.** 5 free transfers a month, then ₦10 each. These are placeholders until pricing is decided.
 - **Sandbox bank rail** for local development:
 
@@ -40,12 +42,25 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - A real SMS/WhatsApp provider for OTPs. In the sandbox, codes are written to the server log.
 - A real partner bank rail (TAJBank or a BaaS provider) in place of the sandbox.
 - KYC tiers and transaction limits.
-- Bills, savings and support cases.
+- A real bill aggregator in place of the bills sandbox, and requery for bill payments left pending.
+- Savings profit on average daily balance (month-end balance for now), once the partner bank confirms its method.
+- Support cases and the other features shown as "coming soon".
 - A release build of the app (signing key, icon, Play Store listing).
 
 ## The app
 
-The Flutter app covers sign-up, the home screen (balance, account number, recent activity), sending money with live status, and transfer details with the session ID.
+The Flutter app covers:
+
+- **Sign-up and sign-in:** phone number, code boxes, and a PIN on a number pad.
+- **Home:** balance card (hideable), account number to copy or share, quick actions, "Send again" for saved recipients, and recent activity.
+- **Send money:** searchable bank list, automatic name check, a big amount pad, a review screen showing the fee, and PIN approval.
+- **Airtime, data, electricity and TV:** all networks, the main DisCos (the meter name is checked and a token issued), and DStv, GOtv and StarTimes packages.
+- **Receipts:** live status for every payment and receipts you can share. They show the session ID for transfers and the token for electricity.
+- **Savings (interest-free):** Goal pots you can add to or take from at any time, and Locked plans (1, 3, 6 or 12 months) that earn a higher expected profit share. Breaking a plan early returns the money but gives back its profit share.
+- **Activity:** money in and out totals, search and filters, grouped by day.
+- **Me:** account details and shortcuts for features that are coming next.
+
+Bills sandbox rules: a meter or smartcard ending in 8 is not found, and any phone, meter or smartcard ending in 0 fails and is refunded. Data and TV prices are samples.
 
 It runs in two modes:
 

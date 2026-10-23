@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:avora/src/api/api.dart';
 import 'package:avora/src/api/http_api.dart';
+import 'package:avora/src/api/models.dart';
 import 'package:avora/src/credentials.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -123,5 +124,67 @@ void main() {
     final b = await Credentials.load(store);
     expect(a.deviceId, hasLength(32));
     expect(b.deviceId, a.deviceId);
+  });
+
+  test('bills: billers parse and payments send the plan and key', () async {
+    await creds.setToken('tok');
+    final api = apiWith(
+      (r) => switch (r.url.path) {
+        '/v1/bills/billers' => json({
+          'billers': [
+            {
+              'id': 'dstv',
+              'name': 'DStv',
+              'category': 'tv',
+              'customer_label': 'Smartcard number',
+              'plans': [
+                {'code': 'dstv-padi', 'name': 'Padi', 'amount': 440000},
+              ],
+              'min_amount': 0,
+              'max_amount': 0,
+            },
+          ],
+        }),
+        _ => json({
+          'id': 'p1',
+          'wallet_id': 1,
+          'biller_id': 'dstv',
+          'biller_name': 'DStv',
+          'category': 'tv',
+          'plan_code': 'dstv-padi',
+          'plan_name': 'Padi',
+          'customer': '1234567891',
+          'customer_name': 'ADA',
+          'amount': 440000,
+          'status': 'success',
+          'created_at': '2026-10-23T10:00:00Z',
+          'updated_at': '2026-10-23T10:00:00Z',
+        }),
+      },
+    );
+    final b = (await api.billers()).single;
+    expect(b.category, BillCategory.tv);
+    expect(b.plans.single.amount, 440000);
+
+    final p = await api.payBill(
+      billerId: 'dstv',
+      planCode: 'dstv-padi',
+      customer: '1234567891',
+      amount: 440000,
+      pin: '135790',
+      idempotencyKey: 'k',
+    );
+    expect(p.status, BillStatus.success);
+    expect(requests.last.headers['Idempotency-Key'], 'k');
+    expect(jsonDecode(requests.last.body)['plan_code'], 'dstv-padi');
+
+    await api.payBill(
+      billerId: 'mtn-airtime',
+      customer: '08031234567',
+      amount: 10000,
+      pin: '135790',
+      idempotencyKey: 'k2',
+    );
+    expect((jsonDecode(requests.last.body) as Map).containsKey('plan_code'), isFalse);
   });
 }

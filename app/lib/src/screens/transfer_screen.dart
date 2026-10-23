@@ -7,6 +7,7 @@ import '../app.dart';
 import '../banks.dart';
 import '../dates.dart';
 import '../money.dart';
+import '../ui/receipt.dart';
 
 /// One transfer, kept up to date until it reaches a final state.
 class TransferScreen extends StatefulWidget {
@@ -74,89 +75,48 @@ class _TransferScreenState extends State<TransferScreen> {
     final t = _t;
     return Scaffold(
       appBar: AppBar(title: const Text('Transfer')),
-      body: SafeArea(
-        child: t == null
-            ? Center(
-                child: _error == null
-                    ? const CircularProgressIndicator()
-                    : const Text("We couldn't load this transfer. Pull down on the home screen to refresh."),
-              )
-            : _Details(t: t),
-      ),
+      body: t == null
+          ? Center(
+              child: _error == null
+                  ? const CircularProgressIndicator()
+                  : const Text("We couldn't load this transfer. Pull down on the home screen to refresh."),
+            )
+          : _receipt(t),
     );
   }
-}
 
-class _Details extends StatelessWidget {
-  const _Details({required this.t});
-
-  final Transfer t;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget _receipt(Transfer t) {
     final s = statusInfo(t.status);
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Center(
-          child: s.done
-              ? Icon(s.icon, size: 64, color: s.good ? theme.colorScheme.primary : theme.colorScheme.error)
-              : const SizedBox(width: 56, height: 56, child: CircularProgressIndicator()),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          s.title,
-          key: const Key('status-title'),
-          textAlign: TextAlign.center,
-          style: theme.textTheme.headlineSmall,
-        ),
-        const SizedBox(height: 8),
-        Text(s.explanation, textAlign: TextAlign.center),
-        const SizedBox(height: 24),
-        Text(formatNaira(t.amount), textAlign: TextAlign.center, style: theme.textTheme.displaySmall),
-        const SizedBox(height: 24),
-        _row('To', t.accountName),
-        _row('Account', '${t.accountNumber} · ${bankName(t.bankCode)}'),
-        if (t.narration.isNotEmpty) _row('For', t.narration),
-        _row('Fee', t.fee == 0 ? 'Free' : formatNaira(t.fee)),
-        _row('Date', formatWhen(t.createdAt)),
-        if (t.sessionId.isNotEmpty) _row('Session ID', t.sessionId, selectable: true),
-        _row('Reference', t.id, selectable: true),
-        if (t.status == TransferStatus.refunded && t.failureReason.isNotEmpty) _row('Reason', t.failureReason),
-        if (t.sessionId.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text(
-            'If the person says they did not get it, give them the session ID. Their bank can trace it.',
-            style: theme.textTheme.bodySmall,
-          ),
-        ],
-      ],
+    final rows = <(String, String)>[
+      ('To', t.accountName),
+      ('Account', '${t.accountNumber} · ${bankName(t.bankCode)}'),
+      if (t.narration.isNotEmpty) ('Note', t.narration),
+      ('Fee', t.fee == 0 ? 'Free' : formatNaira(t.fee)),
+      ('Date', formatWhen(t.createdAt)),
+      if (t.sessionId.isNotEmpty) ('Session ID', t.sessionId),
+      ('Reference', t.id),
+      if (t.status == TransferStatus.refunded && t.failureReason.isNotEmpty) ('Reason', t.failureReason),
+    ];
+    return ReceiptView(
+      tone: s.tone,
+      title: s.title,
+      explanation: s.explanation,
+      amount: formatNaira(t.amount),
+      rows: rows,
+      shareText: receiptText('Transfer to ${t.accountName}', formatNaira(t.amount), s.title, rows),
+      note: t.sessionId.isEmpty
+          ? null
+          : 'If they say it has not arrived, share this receipt. Their bank can trace the session ID.',
     );
   }
-
-  Widget _row(String label, String value, {bool selectable = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(width: 96, child: Text(label)),
-        Expanded(
-          child: selectable ? SelectableText(value, textAlign: TextAlign.end) : Text(value, textAlign: TextAlign.end),
-        ),
-      ],
-    ),
-  );
 }
 
 class StatusInfo {
-  const StatusInfo(this.title, this.explanation, this.icon, {this.done = false, this.good = false});
+  const StatusInfo(this.title, this.explanation, this.tone);
 
   final String title;
   final String explanation;
-  final IconData icon;
-  final bool done;
-  final bool good;
+  final ReceiptTone tone;
 }
 
 /// What each status means, in words a customer can act on.
@@ -164,25 +124,18 @@ StatusInfo statusInfo(TransferStatus s) => switch (s) {
   TransferStatus.held || TransferStatus.sent => const StatusInfo(
     'Sending…',
     'Your money is on its way. This usually takes a few seconds.',
-    Icons.schedule,
+    ReceiptTone.pending,
   ),
-  TransferStatus.delivered => const StatusInfo(
-    'Delivered',
-    'The money has reached their account.',
-    Icons.check_circle,
-    done: true,
-    good: true,
-  ),
+  TransferStatus.delivered => const StatusInfo('Delivered', 'The money has reached their account.', ReceiptTone.good),
   TransferStatus.refunded => const StatusInfo(
     "Didn't go through",
     'The full amount, fee included, is back in your wallet.',
-    Icons.undo,
-    done: true,
+    ReceiptTone.bad,
   ),
   TransferStatus.needsReview => const StatusInfo(
     "We're checking with the bank",
     "Your money is safe. The bank hasn't confirmed yet, so our team is checking. "
         "If it didn't arrive, you'll get a full refund.",
-    Icons.support_agent,
+    ReceiptTone.warn,
   ),
 };
