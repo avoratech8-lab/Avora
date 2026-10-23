@@ -384,6 +384,16 @@ func (s *Service) Resolve(ctx context.Context, id string, to Status, sessionID, 
 
 func (s *Service) Get(ctx context.Context, id string) (Transfer, error) { return s.get(ctx, s.db, id) }
 
+// SentSince totals what a wallet has sent (or has in flight) since t,
+// excluding refunds. Used for per-device and per-tier limits.
+func (s *Service) SentSince(ctx context.Context, walletID int64, t time.Time) (int64, error) {
+	var total int64
+	err := s.db.QueryRow(ctx, `
+		select coalesce(sum(amount), 0) from transfers
+		where wallet_account_id = $1 and created_at >= $2 and status <> 'refunded'`, walletID, t).Scan(&total)
+	return total, err
+}
+
 const columns = `id, idempotency_key, wallet_account_id, bank_code, account_number, account_name,
 	narration, amount, fee, status, coalesce(session_id, ''), coalesce(failure_reason, ''),
 	requery_count, next_requery_at, created_at, updated_at`
