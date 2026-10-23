@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"avora/backend/internal/api"
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
+	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/p2p"
 	"avora/backend/internal/rails"
@@ -86,6 +88,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 		Referrals: ref,
 		Support:   support.NewService(pool),
 		P2P:       p2p.NewService(pool),
+		Insights:  insights.NewService(pool),
 		DB:        pool, Rail: rail, System: sys,
 		Transfers: transfers.NewService(pool, rail, sys, tcfg),
 		Bills:     bills.NewService(pool, bills.Sandbox{}, sys),
@@ -658,5 +661,64 @@ func TestAvoraTagsAndFreeInstantTransfers(t *testing.T) {
 	_, n := bola.call("GET", "/v1/me/notifications", nil, nil)
 	if first := n["notifications"].([]any)[0].(map[string]any); first["body"] != "From Ada Obi (@ada_o): Suya" {
 		t.Errorf("notification = %v", first)
+	}
+}
+
+func TestInsightsAndBudgets(t *testing.T) {
+	srv, sms := newServer(t)
+	ada := &client{t: t, srv: srv, sms: sms, device: "ada-phone"}
+	ada.signIn("08031234567", "482915")
+	credit(t, srv, "S1", "9000000001", 20_000_00)
+
+	if code, _ := ada.call("PUT", "/v1/me/budgets/shoes", map[string]any{"amount": 1_000_00}, nil); code != http.StatusBadRequest {
+		t.Errorf("unknown category: %d", code)
+	}
+	ada.call("PUT", "/v1/me/budgets/data", map[string]any{"amount": 1_800_00}, nil)
+	ada.call("PUT", "/v1/me/budgets/tv", map[string]any{"amount": 5_000_00}, nil)
+	code, b := ada.call("PUT", "/v1/me/budgets/all", map[string]any{"amount": 2_000_00}, nil)
+	if code != http.StatusOK || len(b["budgets"].(map[string]any)) != 3 {
+		t.Fatalf("budgets: %d %v", code, b)
+	}
+
+	pay := func(key string, body map[string]any) {
+		t.Helper()
+		body["pin"] = "482915"
+		if code, p := ada.call("POST", "/v1/bills/payments", body, map[string]string{"Idempotency-Key": key}); code != http.StatusOK {
+			t.Fatalf("pay %s: %d %v", key, code, p)
+		}
+	}
+	pay("d", map[string]any{"biller_id": "mtn-data", "plan_code": "mtn-2gb-7d", "customer": "08031234567"})
+	pay("a", map[string]any{"biller_id": "glo-airtime", "customer": "08051234567", "amount": 1_000_00})
+	pay("x", map[string]any{"biller_id": "glo-airtime", "customer": "08051234560", "amount": 500_00}) // declined
+
+	code, m := ada.call("GET", "/v1/me/insights", nil, nil)
+	if code != http.StatusOK {
+		t.Fatalf("insights: %d %v", code, m)
+	}
+	// ₦20,000 in less ₦50 stamp duty, plus ₦45 and ₦20 cashback.
+	if m["money_in"] != float64(20_015_00) || m["money_out"] != float64(2_500_00) || m["cashback"] != float64(65_00) ||
+		m["budget"] != float64(2_000_00) {
+		t.Fatalf("totals: %v", m)
+	}
+	cats := m["categories"].([]any)
+	got := []string{}
+	for _, c := range cats {
+		c := c.(map[string]any)
+		got = append(got, fmt.Sprintf("%s %v/%v ×%v", c["category"], c["amount"], c["budget"], c["count"]))
+	}
+	if want := []string{"data 150000/180000 ×1", "airtime 100000/0 ×2", "tv 0/500000 ×0"}; !slices.Equal(got, want) {
+		t.Fatalf("categories = %v, want %v", got, want)
+	}
+	if code, _ := ada.call("GET", "/v1/me/insights?month=October", nil, nil); code != http.StatusBadRequest {
+		t.Errorf("bad month: %d", code)
+	}
+
+	_, n := ada.call("GET", "/v1/me/notifications", nil, nil)
+	titles := map[string]int{}
+	for _, x := range n["notifications"].([]any) {
+		titles[x.(map[string]any)["title"].(string)]++
+	}
+	if titles["80% of your data budget used"] != 1 || titles["You've reached your monthly budget"] != 1 {
+		t.Fatalf("notifications = %v", titles)
 	}
 }

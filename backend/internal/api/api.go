@@ -29,6 +29,7 @@ import (
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
 	"avora/backend/internal/inbound"
+	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
 	"avora/backend/internal/notify"
@@ -51,6 +52,7 @@ type Server struct {
 	KYC           *kyc.Service
 	Referrals     *referrals.Service
 	P2P           *p2p.Service
+	Insights      *insights.Service
 	Support       *support.Service
 	Auth          *auth.Service
 	WebhookSecret string
@@ -86,6 +88,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/me/notifications/read", s.signedIn(s.readNotifications))
 	mux.HandleFunc("GET /v1/me/profile", s.signedIn(s.getProfile))
 	mux.HandleFunc("PATCH /v1/me/profile", s.signedIn(s.updateProfile))
+	mux.HandleFunc("GET /v1/me/insights", s.signedIn(s.monthInsights))
+	mux.HandleFunc("GET /v1/me/budgets", s.signedIn(s.listBudgets))
+	mux.HandleFunc("PUT /v1/me/budgets/{category}", s.signedIn(s.setBudget))
 	mux.HandleFunc("GET /v1/p2p/find", s.signedIn(s.findPerson))
 	mux.HandleFunc("POST /v1/p2p", s.signedIn(s.sendP2P))
 	mux.HandleFunc("GET /v1/p2p/{id}", s.signedIn(s.getP2P))
@@ -291,6 +296,7 @@ func (s *Server) createTransfer(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.budgetAlerts(r, p.WalletID)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -506,6 +512,7 @@ func (s *Server) sendP2P(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.budgetAlerts(r, p.WalletID)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -648,7 +655,54 @@ func (s *Server) payBill(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.budgetAlerts(r, p.WalletID)
 	writeJSON(w, http.StatusOK, pay)
+}
+
+// budgetAlerts tells the customer when a payment takes a budget past 80% or
+// 100%. The payment has already gone through, so a failure here is logged.
+func (s *Server) budgetAlerts(r *http.Request, wallet int64) {
+	if err := s.Insights.Alert(r.Context(), wallet); err != nil {
+		s.Log.Error("budget alerts", "wallet", wallet, "err", err)
+	}
+}
+
+func (s *Server) monthInsights(w http.ResponseWriter, r *http.Request) {
+	start, err := s.Insights.ParseMonth(r.URL.Query().Get("month"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	m, err := s.Insights.Month(r.Context(), principal(r).WalletID, start)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (s *Server) listBudgets(w http.ResponseWriter, r *http.Request) {
+	b, err := s.Insights.Budgets(r.Context(), principal(r).WalletID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"budgets": b})
+}
+
+func (s *Server) setBudget(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Amount int64 `json:"amount"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	wallet := principal(r).WalletID
+	if err := s.Insights.SetBudget(r.Context(), wallet, r.PathValue("category"), body.Amount); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.listBudgets(w, r)
 }
 
 func (s *Server) listSavings(w http.ResponseWriter, r *http.Request) {
@@ -867,7 +921,7 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "code_used", "You've already joined with an invite code.")
 	case errors.Is(err, referrals.ErrTooLate):
 		writeError(w, http.StatusConflict, "code_too_late", "Invite codes can only be added in your first 30 days.")
-	case errors.Is(err, referrals.ErrInvalid), errors.Is(err, support.ErrInvalid):
+	case errors.Is(err, referrals.ErrInvalid), errors.Is(err, support.ErrInvalid), errors.Is(err, insights.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request", friendly(err))
 	case errors.Is(err, auth.ErrThisDevice):
 		writeError(w, http.StatusConflict, "this_device", "This is the phone you're using. Sign out instead.")
