@@ -564,6 +564,13 @@ class DemoAvoraApi implements AvoraApi {
 
   /// Transfers and bills since midnight count against the tier's daily limit.
   void _checkLimit(_DemoUser u, int amount) {
+    if (u.frozen) {
+      throw ApiException(
+        'account_frozen',
+        'Your account is frozen, so no money can leave it. Unfreeze it with your PIN under Me → Security.',
+        status: 403,
+      );
+    }
     final now = _now();
     final midnight = DateTime(now.year, now.month, now.day);
     final today =
@@ -1035,6 +1042,8 @@ class DemoAvoraApi implements AvoraApi {
     final c = _withCard(_card(u, id));
     final reason = c.frozen
         ? 'card frozen'
+        : u.frozen
+        ? 'account frozen'
         : c.monthlyLimit > 0 && c.spentThisMonth + amount > c.monthlyLimit
         ? 'over monthly limit'
         : amount > u.balance
@@ -1566,6 +1575,108 @@ class DemoAvoraApi implements AvoraApi {
   }
 
   @override
+  Future<bool> frozen() async => _me.frozen;
+
+  @override
+  Future<void> freeze() async {
+    final u = _me;
+    if (u.frozen) return;
+    u.frozen = true;
+    u.devices.removeWhere((d) => !d.thisPhone);
+    _notify(
+      u,
+      'security',
+      'Account frozen',
+      'No money can leave your account, and your other phones were signed out. Money can still come in. '
+          "Unfreeze it with your PIN under Me → Security when you're ready.",
+    );
+  }
+
+  @override
+  Future<void> unfreeze(String pin) async {
+    final u = _me;
+    if (u.pin != pin) throw ApiException('wrong_pin', 'That PIN is wrong.', status: 401);
+    if (!u.frozen) return;
+    u.frozen = false;
+    _notify(
+      u,
+      'security',
+      'Account unfrozen',
+      "Money can leave your account again. If you didn't do this, freeze it now and chat with us.",
+    );
+  }
+
+  @override
+  Future<PeriodStatement> periodStatement({required DateTime from, required DateTime to}) async {
+    final u = _me;
+    for (final t in u.transfers.values) {
+      _settle(u, t);
+    }
+    final start = DateTime(from.year, from.month, from.day);
+    final end = DateTime(to.year, to.month, to.day + 1);
+    if (end.isBefore(start.add(const Duration(days: 1)))) {
+      throw ApiException('invalid_request', 'The end date must be on or after the start date.', status: 400);
+    }
+    final opening = u.lines.where((l) => l.at.isBefore(start)).fold<int>(0, (a, l) => a + l.amount);
+    final lines = u.lines.where((l) => !l.at.isBefore(start) && l.at.isBefore(end)).toList();
+    final moneyIn = lines.where((l) => l.amount > 0).fold<int>(0, (a, l) => a + l.amount);
+    final moneyOut = lines.where((l) => l.amount < 0).fold<int>(0, (a, l) => a - l.amount);
+    return PeriodStatement(
+      accountName: u.name,
+      accountNumber: u.accountNumber,
+      from: start,
+      to: DateTime(to.year, to.month, to.day),
+      openingBalance: opening,
+      moneyIn: moneyIn,
+      moneyOut: moneyOut,
+      closingBalance: opening + moneyIn - moneyOut,
+      lines: lines,
+    );
+  }
+
+  @override
+  Future<ProblemReport> reportProblem({required String ref, required ProblemReason reason, String details = ''}) async {
+    final u = _me;
+    details = details.trim();
+    if (reason == ProblemReason.other && details.isEmpty) {
+      throw ApiException('invalid_request', 'Tell us what went wrong.', status: 400);
+    }
+    final line = u.lines.where((l) => ref.isNotEmpty && l.ref == ref).firstOrNull;
+    if (line == null) throw ApiException('not_found', "We couldn't find that payment or report.", status: 404);
+    if (u.reports.any((r) => r.ref == ref && r.status == ProblemStatus.open)) {
+      throw ApiException(
+        'dispute_open',
+        "You've already reported this payment. We'll reply in your notifications.",
+        status: 409,
+      );
+    }
+    final r = ProblemReport(
+      id: randomId(),
+      ref: ref,
+      description: line.description,
+      amount: line.amount,
+      reason: reason,
+      details: details,
+      status: ProblemStatus.open,
+      answer: '',
+      createdAt: _now(),
+    );
+    u.reports.add(r);
+    _notify(
+      u,
+      'dispute',
+      "We're looking into it",
+      "We got your report about ${line.description} (${formatNaira(line.amount.abs())}). "
+          "We'll reply here, usually within 24 hours.",
+      r.id,
+    );
+    return r;
+  }
+
+  @override
+  Future<List<ProblemReport>> problemReports() async => _me.reports.reversed.toList();
+
+  @override
   Future<void> logout() async {
     _tokens.remove(credentials.token);
     await credentials.setToken(null);
@@ -1606,6 +1717,8 @@ class _DemoUser {
   var roundUp = const RoundUp(potId: '', step: 10000);
   final budgetAlerts = <String>{}; // "2026-10 data 80"
   final schedules = <String, Schedule>{};
+  bool frozen = false;
+  final reports = <ProblemReport>[];
 }
 
 class _DemoShare {

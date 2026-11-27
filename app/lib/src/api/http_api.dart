@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../credentials.dart';
+import '../dates.dart';
 import 'api.dart';
 import 'models.dart';
 
@@ -441,6 +442,36 @@ class HttpAvoraApi implements AvoraApi {
   @override
   Future<List<SupportMessage>> sendSupportMessage(String body) async =>
       _messages(await _call('POST', '/v1/support/messages', body: {'body': body}));
+
+  @override
+  Future<bool> frozen() async {
+    final j = await _call('GET', '/v1/me/freeze');
+    return j['frozen'] as bool;
+  }
+
+  @override
+  Future<void> freeze() => _call('POST', '/v1/me/freeze');
+
+  @override
+  Future<void> unfreeze(String pin) => _call('POST', '/v1/me/unfreeze', body: {'pin': pin});
+
+  @override
+  Future<PeriodStatement> periodStatement({required DateTime from, required DateTime to}) async {
+    final j = await _call('GET', '/v1/me/statement/period', query: {'from': isoDate(from), 'to': isoDate(to)});
+    return PeriodStatement.fromJson(j as Map<String, dynamic>);
+  }
+
+  @override
+  Future<ProblemReport> reportProblem({required String ref, required ProblemReason reason, String details = ''}) async {
+    final j = await _call('POST', '/v1/disputes', body: {'ref': ref, 'reason': reason.code, 'details': details});
+    return ProblemReport.fromJson(j as Map<String, dynamic>);
+  }
+
+  @override
+  Future<List<ProblemReport>> problemReports() async {
+    final j = await _call('GET', '/v1/disputes');
+    return [for (final d in j['disputes'] as List) ProblemReport.fromJson(d as Map<String, dynamic>)];
+  }
 
   @override
   Future<void> logout() async {

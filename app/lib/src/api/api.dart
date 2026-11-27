@@ -166,6 +166,25 @@ abstract class AvoraApi {
   /// Sends a chat message; the reply comes back with the conversation.
   Future<List<SupportMessage>> sendSupportMessage(String body);
 
+  /// Whether the customer has frozen their account.
+  Future<bool> frozen();
+
+  /// Stops all money leaving the account at once and signs out other
+  /// phones. Money can still come in.
+  Future<void> freeze();
+
+  /// Lets money leave the account again; needs the PIN.
+  Future<void> unfreeze(String pin);
+
+  /// A statement for the days [from] to [to], both included.
+  Future<PeriodStatement> periodStatement({required DateTime from, required DateTime to});
+
+  /// Reports a problem with the payment [ref] on my statement.
+  Future<ProblemReport> reportProblem({required String ref, required ProblemReason reason, String details = ''});
+
+  /// My reports, newest first.
+  Future<List<ProblemReport>> problemReports();
+
   Future<void> logout();
 }
 

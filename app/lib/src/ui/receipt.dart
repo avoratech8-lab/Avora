@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app.dart';
+import '../screens/protect_screens.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -20,6 +21,8 @@ class ReceiptView extends StatelessWidget {
     required this.shareText,
     this.highlight,
     this.note,
+    this.problemRef,
+    this.problemWhat = '',
   });
 
   final ReceiptTone tone;
@@ -30,6 +33,10 @@ class ReceiptView extends StatelessWidget {
   final String shareText;
   final (String, String)? highlight; // e.g. an electricity token, shown big with copy
   final String? note;
+
+  /// The payment's id, to offer "Report a problem"; null hides it.
+  final String? problemRef;
+  final String problemWhat;
 
   @override
   Widget build(BuildContext context) {
@@ -101,6 +108,21 @@ class ReceiptView extends StatelessWidget {
                     note!,
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+                if (problemRef != null && problemRef!.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Center(
+                    child: TextButton.icon(
+                      key: const Key('report-problem'),
+                      onPressed: () async {
+                        if (await showReportProblem(context, ref: problemRef!, what: problemWhat) && context.mounted) {
+                          showMessage(context, "Report sent. We'll reply in your notifications.");
+                        }
+                      },
+                      icon: const Icon(Icons.flag_outlined, size: 18),
+                      label: const Text('Report a problem'),
+                    ),
                   ),
                 ],
               ],

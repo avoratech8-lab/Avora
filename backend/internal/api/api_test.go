@@ -21,6 +21,7 @@ import (
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
 	"avora/backend/internal/cards"
+	"avora/backend/internal/disputes"
 	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/p2p"
@@ -94,6 +95,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 		Insights:  insights.NewService(pool),
 		Schedules: schedules.NewService(pool),
 		Splits:    splits.NewService(pool),
+		Disputes:  disputes.NewService(pool),
 		Cards:     cards.NewService(pool, sys, []byte("card-secret")),
 		Sandbox:   true,
 		DB:        pool, Rail: rail, System: sys,

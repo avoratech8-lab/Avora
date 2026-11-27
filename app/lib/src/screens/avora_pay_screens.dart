@@ -292,6 +292,8 @@ class _P2PReceiptScreenState extends State<P2PReceiptScreen> {
           title,
           rows,
         ),
+        problemRef: t.id,
+        problemWhat: '${formatNaira(t.amount)} ${t.outgoing ? 'to' : 'from'} ${o.name}',
       ),
     );
   }

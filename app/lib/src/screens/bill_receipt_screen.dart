@@ -104,6 +104,8 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
         ?highlight,
         ...rows,
       ]),
+      problemRef: p.id,
+      problemWhat: '${formatNaira(p.amount)} for ${'${p.billerName} ${p.planName}'.trim()}',
     );
   }
 

@@ -461,4 +461,60 @@ void main() {
     await api.paySplit('sp1', '135790');
     expect('${requests.last.method} ${requests.last.url.path}', 'POST /v1/splits/sp1/pay');
   });
+
+  test('freeze, a period statement and a problem report use the right routes', () async {
+    final api = apiWith(
+      (r) => switch ((r.method, r.url.path)) {
+        ('POST', '/v1/me/freeze') => json({'frozen': true, 'frozen_at': '2026-11-27T10:00:00Z'}),
+        ('GET', '/v1/me/freeze') => json({'frozen': true, 'frozen_at': '2026-11-27T10:00:00Z'}),
+        ('POST', '/v1/me/unfreeze') => json({'frozen': false, 'frozen_at': null}),
+        ('GET', '/v1/me/statement/period') => json({
+          'account_name': 'Ada',
+          'account_number': '9012345678',
+          'from': '2026-10-01',
+          'to': '2026-10-31',
+          'opening_balance': 1000,
+          'money_in': 500,
+          'money_out': 200,
+          'closing_balance': 1300,
+          'truncated': false,
+          'lines': [
+            {
+              'kind': 'inbound_credit',
+              'description': 'From TUNDE',
+              'ref': 'S1',
+              'amount': 500,
+              'at': '2026-10-02T09:00:00Z',
+            },
+          ],
+        }),
+        ('POST', '/v1/disputes') => json({
+          'id': 'd1',
+          'ref': 't1',
+          'kind': 'transfer_hold',
+          'description': 'Transfer to ADA',
+          'amount': -500,
+          'reason': 'not_received',
+          'details': '',
+          'status': 'open',
+          'answer': '',
+          'created_at': '2026-11-27T10:00:00Z',
+          'closed_at': null,
+        }),
+        _ => json({}, 404),
+      },
+    );
+    await api.freeze();
+    expect(await api.frozen(), isTrue);
+    await api.unfreeze('135790');
+    expect(jsonDecode(requests.last.body), {'pin': '135790'});
+
+    final s = await api.periodStatement(from: DateTime(2026, 10, 1), to: DateTime(2026, 10, 31));
+    expect(requests.last.url.queryParameters, {'from': '2026-10-01', 'to': '2026-10-31'});
+    expect((s.openingBalance, s.closingBalance, s.lines.single.ref), (1000, 1300, 'S1'));
+
+    final d = await api.reportProblem(ref: 't1', reason: ProblemReason.notReceived);
+    expect(jsonDecode(requests.last.body), {'ref': 't1', 'reason': 'not_received', 'details': ''});
+    expect((d.status, d.reason), (ProblemStatus.open, ProblemReason.notReceived));
+  });
 }

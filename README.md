@@ -24,6 +24,9 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - **Scheduled payments.** Pay a bank account, an Avora tag or phone, a bill or a goal pot once, daily, weekly or monthly (`GET/POST /v1/schedules`, `POST /v1/schedules/{id}/pause` with `{"paused"}`, `DELETE /v1/schedules/{id}`). The payee is checked when it's set up, with the PIN, so each run goes ahead without asking. Monthly runs keep the day, or use the last day of a shorter month. Every minute the server claims what's due (`for update skip locked`, so several servers can run it), pays it under the same daily limit as a payment made by hand, and tells the customer how it went. Resuming a paused schedule skips the runs it missed. `POST /v1/sandbox/schedules/{id}/run` runs one now.
 - **Split bills.** Ask 1 to 10 Avora customers by tag or phone to chip in for a bill (`POST /v1/splits` with `{"title", "total", "people": [{"to", "amount"}]}`). Each gets a notification and pays (`POST /v1/splits/{id}/pay` with `{"pin"}`, a free Avora transfer to whoever asked) or declines (`POST /v1/splits/{id}/decline`), once. The asker is told either way. `GET /v1/splits` and `GET /v1/splits/{id}` show who has paid.
 - **Security settings.** Change PIN (`POST /v1/me/pin`, which signs out other phones), check the PIN to unlock the app (`POST /v1/me/pin/verify`), and list or remove phones (`GET /v1/me/devices`, `DELETE /v1/me/devices/{id}`). The app sends `X-Device-Name` at sign-in so phones have names.
+- **Freeze my account.** `POST /v1/me/freeze` stops all money leaving the account at once, with no PIN, for a customer who thinks someone else has their phone, PIN or card details. Transfers, bills, Avora payments and split payments are refused, card payments are declined, scheduled payments don't go out, and every other phone is signed out. Money can still come in. `POST /v1/me/unfreeze` with `{"pin"}` undoes it, so a thief holding an unlocked phone can't. Both send a notification.
+- **Statements.** `GET /v1/me/statement/period?from=2026-10-01&to=2026-10-31` gives whole days in Lagos time (up to a year): opening balance, money in, money out, closing balance and every line, oldest first.
+- **Report a problem.** A customer can report a payment on their own statement (`POST /v1/disputes` with `{"ref", "reason", "details"}`; reasons are `not_received`, `wrong_amount`, `not_me`, `charged_twice` and `other`). A payment has at most one open report. Agents answer with `POST /v1/ops/disputes/{id}/close` and `{"outcome": "resolved" or "rejected", "answer"}` (ops key), and the customer is notified. Any money owed goes back through the ledger as usual.
 - **Notifications.** Money received, transfers delivered, refunded or under review, bill refunds, new phone sign-ins, PIN changes and tier upgrades: `GET /v1/me/notifications` and `POST /v1/me/notifications/read`.
 - **Referrals.** Each customer gets an invite code (`GET /v1/me/referrals`). A friend can add it within 30 days of joining (`POST /v1/me/referrals`). When that friend first reaches Tier 2, the inviter is paid ₦500 from `system:referral_rewards`, once per friend. The amount is a placeholder until marketing sets a budget.
 - **Help centre and support chat.** `GET /v1/help/articles` serves the help articles. `GET/POST /v1/support/messages` is the chat: a bot answers from the articles and hands over to a person when asked or when it has no answer. Agents reply with `POST /v1/ops/support/{user_id}/reply` (ops key), which also notifies the customer.
@@ -56,7 +59,8 @@ This repository holds the backend (`backend/`, Go) and the Android app (`app/`, 
 - Push notifications (the in-app inbox works; FCM/APNs delivery is not wired up).
 - A real bill aggregator in place of the bills sandbox, and requery for bill payments left pending.
 - Savings profit on average daily balance (month-end balance for now), once the partner bank confirms its method.
-- A support desk for agents (they reply through the ops API for now), and the other features shown as "coming soon" (cards, statements, personal details).
+- A support desk for agents (they reply to chats and problem reports through the ops API for now), and the other features shown as "coming soon" (terms and privacy).
+- Statements as a stamped PDF from the partner bank, for embassies and lenders that won't take a spreadsheet.
 - A release build of the app (signing key, icon, Play Store listing).
 
 ## The app
@@ -77,6 +81,9 @@ The Flutter app covers:
 - **Round-ups:** turn on from Savings and pick the pot and step.
 - **Scheduled payments:** rent, school fees, a monthly data plan or a weekly save, set once from Me or Home → More. Shows what will go out this month, each schedule's next date and how the last run went, with pause, resume and delete.
 - **Split bills:** ask friends on Avora for their share, split evenly or by hand, watch who has paid, and pay or decline a request in one tap. Demo users get a request from @tolu to try it.
+- **Freeze my account:** one tap under Me → Security stops all money leaving, signs out other phones, and only your PIN undoes it.
+- **Statements:** this month, last month, the last 3 months or dates you choose, with opening and closing balances, shared as a spreadsheet (CSV) for a landlord, visa or loan application.
+- **Report a problem:** on any transfer, bill or Avora receipt, say what went wrong. Track it and read the answer under Me → My reports.
 - **Activity:** money in and out totals, search and filters, grouped by day.
 - **Security:** fingerprint or face unlock, an app lock (immediately, after 1 or after 5 minutes away) with PIN fallback, fingerprint or face approval for payments, change PIN, and phones signed in. With biometrics on, the PIN is kept in the phone's Keystore/Keychain and only released after a fingerprint or face check, so the server still checks the PIN on every payment.
 - **Limits:** your KYC tier and what it allows, and BVN or NIN verification to move up.
@@ -136,6 +143,9 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | POST | `/v1/auth/logout` | End this session |
 | GET | `/v1/me/wallet` | My wallet and balance |
 | GET | `/v1/me/statement` | My movements, newest first |
+| GET | `/v1/me/statement/period?from=&to=` | A statement for whole days, with opening and closing balances |
+| GET/POST | `/v1/me/freeze` | Whether money can leave / freeze the account now |
+| POST | `/v1/me/unfreeze` | `{"pin"}`: let money leave again |
 | POST | `/v1/name-enquiry` | `{"bank_code", "account_number"}` returns the account name |
 | POST | `/v1/transfers` | `{"bank_code", "account_number", "amount", "narration", "pin"}`; requires an `Idempotency-Key` header |
 | GET | `/v1/transfers/{id}` | One of my transfers |
@@ -169,6 +179,9 @@ Signed-in routes need `Authorization: Bearer <token>` and the `X-Device-ID` the 
 | GET | `/v1/splits/{id}` | Who owes what |
 | POST | `/v1/splits/{id}/pay` | `{"pin"}`: pay my share |
 | POST | `/v1/splits/{id}/decline` | Decline my share |
+| GET/POST | `/v1/disputes` | My problem reports / `{"ref", "reason", "details"}`: report a payment |
+| GET | `/v1/disputes/{id}` | One report and its answer |
+| POST | `/v1/ops/disputes/{id}/close` | `{"outcome", "answer"}`; requires `X-Ops-Key` |
 | GET | `/v1/me/referrals` | My invite code and rewards |
 | POST | `/v1/me/referrals` | `{"code"}`: the code I was invited with |
 | GET | `/v1/help/articles` | Help centre articles |

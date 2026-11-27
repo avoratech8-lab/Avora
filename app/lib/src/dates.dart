@@ -59,3 +59,7 @@ String formatMonth(DateTime t) {
   ];
   return '${names[t.month - 1]} ${t.year}';
 }
+
+/// "2026-10-01", the calendar date with no time zone.
+String isoDate(DateTime t) =>
+    '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
