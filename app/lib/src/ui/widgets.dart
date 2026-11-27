@@ -26,7 +26,7 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
-/// The Avora mark: a rounded square with an "a".
+/// The Avora mark: the "A" from the logo. [light] sets it on a white tile, for dark or green backgrounds.
 class LogoMark extends StatelessWidget {
   const LogoMark({super.key, this.size = 56, this.light = false});
 
@@ -35,26 +35,31 @@ class LogoMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const mark = Image(image: AssetImage('assets/brand/avora-mark.png'), semanticLabel: 'Avora');
+    if (!light) return SizedBox.square(dimension: size, child: mark);
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        color: light ? Colors.white : null,
-        gradient: light ? null : Brand.cardGradient,
-        borderRadius: BorderRadius.circular(size * 0.3),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        'a',
-        style: TextStyle(
-          fontFamily: 'Manrope',
-          fontSize: size * 0.62,
-          height: 1,
-          fontWeight: FontWeight.w800,
-          fontVariations: const [FontVariation.weight(800)],
-          color: light ? Brand.green : Colors.white,
-        ),
-      ),
+      padding: EdgeInsets.all(size * 0.1),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(size * 0.3)),
+      child: mark,
+    );
+  }
+}
+
+/// The full Avora wordmark ("A" and "vora") in white, for dark or green backgrounds.
+class Wordmark extends StatelessWidget {
+  const Wordmark({super.key, this.height = 40});
+
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/brand/avora-wordmark-white.png',
+      height: height,
+      semanticLabel: 'Avora',
+      filterQuality: FilterQuality.medium,
     );
   }
 }

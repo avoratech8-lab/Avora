@@ -22,13 +22,7 @@ class WelcomeScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const LogoMark(size: 40, light: true),
-                    const SizedBox(width: 10),
-                    Text('avora', style: theme.textTheme.titleLarge?.copyWith(color: Colors.white)),
-                  ],
-                ),
+                const Wordmark(height: 44),
                 const Spacer(),
                 Text(
                   'Money that\nnever gets lost.',
