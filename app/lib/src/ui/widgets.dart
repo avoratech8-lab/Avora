@@ -26,7 +26,7 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
-/// The Avora mark: the "A" from the logo. [light] sets it on a white tile, for dark or green backgrounds.
+/// The Avora mark: the "A" from the logo. [light] sets it on a white tile, for dark or coloured backgrounds.
 class LogoMark extends StatelessWidget {
   const LogoMark({super.key, this.size = 56, this.light = false});
 
@@ -47,7 +47,7 @@ class LogoMark extends StatelessWidget {
   }
 }
 
-/// The full Avora wordmark ("A" and "vora") in white, for dark or green backgrounds.
+/// The full Avora wordmark ("A" and "vora") in white, for dark or coloured backgrounds.
 class Wordmark extends StatelessWidget {
   const Wordmark({super.key, this.height = 40});
 

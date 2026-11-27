@@ -60,7 +60,7 @@ class _RoundUpCardState extends State<RoundUpCard> {
     final pot = widget.goals.where((p) => p.id == r.potId).firstOrNull;
     final on = r.on && pot != null;
     return Material(
-      color: on ? Brand.lime.withValues(alpha: 0.35) : theme.colorScheme.surface,
+      color: on ? Brand.cream : theme.colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         key: const Key('roundup'),
@@ -70,7 +70,7 @@ class _RoundUpCardState extends State<RoundUpCard> {
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              Icon(Icons.autorenew_rounded, color: on ? Brand.deepGreen : theme.colorScheme.primary, size: 30),
+              Icon(Icons.autorenew_rounded, color: on ? Brand.navy : theme.colorScheme.primary, size: 30),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

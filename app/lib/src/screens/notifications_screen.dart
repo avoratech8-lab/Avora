@@ -42,15 +42,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   static (IconData, Color) _look(String kind) => switch (kind) {
-    'money_in' => (Icons.south_west_rounded, Brand.green),
+    'money_in' => (Icons.south_west_rounded, Brand.blue),
     'transfer' => (Icons.north_east_rounded, const Color(0xFF2563EB)),
     'bill' => (Icons.replay_rounded, Brand.warning),
     'security' => (Icons.shield_outlined, Brand.danger),
     'budget' => (Icons.flag_outlined, Brand.warning),
     'split' => (Icons.call_split_rounded, const Color(0xFF9333EA)),
-    'schedule' => (Icons.event_repeat_rounded, Brand.green),
+    'schedule' => (Icons.event_repeat_rounded, Brand.blue),
     'card' => (Icons.credit_card_rounded, const Color(0xFF2563EB)),
-    _ => (Icons.campaign_outlined, Brand.deepGreen),
+    _ => (Icons.campaign_outlined, Brand.navy),
   };
 
   VoidCallback? _open(AppNotification n) {
@@ -127,7 +127,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                         key: Key('unread-${n.id}'),
                                         width: 8,
                                         height: 8,
-                                        decoration: const BoxDecoration(color: Brand.green, shape: BoxShape.circle),
+                                        decoration: const BoxDecoration(color: Brand.blue, shape: BoxShape.circle),
                                       ),
                                   ],
                                 ),

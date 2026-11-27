@@ -367,11 +367,9 @@ class CardFace extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF0B1F18), Brand.deepGreen, Brand.green],
+          colors: [Color(0xFF050E2B), Brand.navy, Brand.blue],
         ),
-        boxShadow: [
-          BoxShadow(color: Brand.deepGreen.withValues(alpha: 0.35), blurRadius: 18, offset: const Offset(0, 8)),
-        ],
+        boxShadow: [BoxShadow(color: Brand.navy.withValues(alpha: 0.35), blurRadius: 18, offset: const Offset(0, 8))],
       ),
       child: Stack(
         children: [
@@ -381,7 +379,7 @@ class CardFace extends StatelessWidget {
             child: Container(
               width: 180,
               height: 180,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: Brand.lime.withValues(alpha: 0.12)),
+              decoration: BoxDecoration(shape: BoxShape.circle, color: Brand.orange.withValues(alpha: 0.12)),
             ),
           ),
           Padding(
@@ -419,7 +417,7 @@ class CardFace extends StatelessWidget {
                     Text(
                       card.brand.toUpperCase(),
                       style: theme.textTheme.titleMedium?.copyWith(
-                        color: Brand.lime,
+                        color: Brand.orange,
                         fontStyle: FontStyle.italic,
                         letterSpacing: 1,
                       ),
@@ -586,7 +584,7 @@ class _Spent extends StatelessWidget {
               child: LinearProgressIndicator(
                 value: (card.spentThisMonth / limit).clamp(0, 1).toDouble(),
                 minHeight: 6,
-                color: card.spentThisMonth * 10 >= limit * 8 ? Brand.warning : Brand.green,
+                color: card.spentThisMonth * 10 >= limit * 8 ? Brand.warning : Brand.blue,
               ),
             ),
           ],

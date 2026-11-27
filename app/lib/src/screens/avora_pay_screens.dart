@@ -94,18 +94,15 @@ class _AvoraPayScreenState extends State<AvoraPayScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Brand.lime.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                    decoration: BoxDecoration(color: Brand.cream, borderRadius: BorderRadius.circular(16)),
                     child: Row(
                       children: [
-                        const Icon(Icons.bolt_rounded, color: Brand.deepGreen),
+                        const Icon(Icons.bolt_rounded, color: Brand.navy),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             'Free and instant, every time. It never leaves Avora, so it never gets stuck.',
-                            style: theme.textTheme.bodyMedium?.copyWith(color: Brand.deepGreen),
+                            style: theme.textTheme.bodyMedium?.copyWith(color: Brand.navy),
                           ),
                         ),
                       ],

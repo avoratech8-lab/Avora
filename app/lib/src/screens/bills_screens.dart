@@ -346,13 +346,13 @@ class _Note extends StatelessWidget {
       key: noteKey,
       margin: const EdgeInsets.only(top: 14),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: Brand.lime.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(color: Brand.cream, borderRadius: BorderRadius.circular(14)),
       child: Row(
         children: [
-          Icon(icon, color: Brand.deepGreen, size: 20),
+          Icon(icon, color: Brand.navy, size: 20),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: Brand.deepGreen)),
+            child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: Brand.navy)),
           ),
         ],
       ),

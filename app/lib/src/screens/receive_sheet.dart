@@ -119,14 +119,14 @@ class PayQr extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Brand.green.withValues(alpha: 0.25), width: 2),
+        border: Border.all(color: Brand.blue.withValues(alpha: 0.25), width: 2),
       ),
       child: QrImageView(
         data: code.encode(),
         size: size,
         padding: EdgeInsets.zero,
-        eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.circle, color: Brand.deepGreen),
-        dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.circle, color: Brand.deepGreen),
+        eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.circle, color: Brand.navy),
+        dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.circle, color: Brand.navy),
       ),
     );
   }
@@ -262,7 +262,7 @@ class _ScanScreenState extends State<ScanScreen> {
               width: 250,
               height: 250,
               decoration: BoxDecoration(
-                border: Border.all(color: Brand.lime, width: 3),
+                border: Border.all(color: Brand.orange, width: 3),
                 borderRadius: BorderRadius.circular(28),
               ),
             ),
@@ -283,7 +283,7 @@ class _ScanScreenState extends State<ScanScreen> {
                   onPressed: () =>
                       Navigator.of(context)
                           .pushReplacement(MaterialPageRoute<void>(builder: (_) => const SendScreen())),
-                  child: const Text('Type an account number instead', style: TextStyle(color: Brand.lime)),
+                  child: const Text('Type an account number instead', style: TextStyle(color: Brand.orange)),
                 ),
               ],
             ),

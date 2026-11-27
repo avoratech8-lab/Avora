@@ -132,7 +132,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
               ListTile(
                 key: Key('lock-${l.name}'),
                 title: Text(l.label),
-                trailing: l == security.lockAfter ? const Icon(Icons.check_rounded, color: Brand.green) : null,
+                trailing: l == security.lockAfter ? const Icon(Icons.check_rounded, color: Brand.blue) : null,
                 onTap: () => Navigator.pop(c, l),
               ),
           ],
@@ -151,13 +151,13 @@ class _SafetyTips extends StatelessWidget {
     final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Brand.green.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(18)),
+      decoration: BoxDecoration(color: Brand.blue.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(18)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.shield_outlined, color: Brand.green),
+              const Icon(Icons.shield_outlined, color: Brand.blue),
               const SizedBox(width: 10),
               Text('Staying safe', style: theme.textTheme.titleSmall),
             ],
@@ -365,7 +365,7 @@ class _ChangePinScreenState extends State<ChangePinScreen> {
                         height: 4,
                         margin: const EdgeInsets.symmetric(horizontal: 3),
                         decoration: BoxDecoration(
-                          color: i <= _step ? Brand.green : theme.colorScheme.outlineVariant,
+                          color: i <= _step ? Brand.blue : theme.colorScheme.outlineVariant,
                           borderRadius: BorderRadius.circular(2),
                         ),
                       ),
@@ -495,7 +495,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                           key: Key('device-${d.id}'),
                           leading: Icon(
                             Icons.smartphone_rounded,
-                            color: d.thisPhone ? Brand.green : theme.colorScheme.onSurfaceVariant,
+                            color: d.thisPhone ? Brand.blue : theme.colorScheme.onSurfaceVariant,
                           ),
                           title: Text(_name(d), style: theme.textTheme.titleSmall),
                           subtitle: Text(

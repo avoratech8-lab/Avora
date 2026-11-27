@@ -123,7 +123,7 @@ class _TierCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.workspace_premium_rounded, color: Brand.lime),
+              const Icon(Icons.workspace_premium_rounded, color: Brand.orange),
               const SizedBox(width: 8),
               Text(
                 'Tier ${status.tier}',
@@ -188,7 +188,7 @@ class _IdTile extends StatelessWidget {
       key: Key('verify-$kind'),
       leading: Icon(
         verified ? Icons.verified_rounded : Icons.badge_outlined,
-        color: verified ? Brand.green : theme.colorScheme.primary,
+        color: verified ? Brand.blue : theme.colorScheme.primary,
       ),
       title: Text(kind.toUpperCase(), style: theme.textTheme.titleSmall),
       subtitle: Text(verified ? 'Verified' : label),
@@ -212,13 +212,13 @@ class _TierRow extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: current ? Brand.green : theme.colorScheme.outlineVariant, width: current ? 2 : 1),
+        border: Border.all(color: current ? Brand.blue : theme.colorScheme.outlineVariant, width: current ? 2 : 1),
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 18,
-            backgroundColor: current ? Brand.green : theme.colorScheme.surfaceContainerHighest,
+            backgroundColor: current ? Brand.blue : theme.colorScheme.surfaceContainerHighest,
             child: Text(
               '${tier.tier}',
               style: theme.textTheme.titleSmall?.copyWith(color: current ? Colors.white : null),
@@ -238,7 +238,7 @@ class _TierRow extends StatelessWidget {
               ],
             ),
           ),
-          if (current) const Icon(Icons.check_circle_rounded, color: Brand.green),
+          if (current) const Icon(Icons.check_circle_rounded, color: Brand.blue),
         ],
       ),
     );

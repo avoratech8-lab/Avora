@@ -171,7 +171,7 @@ class _MonthCardState extends State<_MonthCard> {
                         ? Brand.danger
                         : i.moneyOut * 10 >= i.budget * 8
                         ? Brand.warning
-                        : Brand.green,
+                        : Brand.blue,
                   ),
                 ),
                 const SizedBox(height: 4),

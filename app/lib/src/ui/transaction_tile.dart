@@ -13,11 +13,11 @@ class TransactionTile extends StatelessWidget {
   final VoidCallback? onTap;
 
   static (IconData, Color) look(StatementLine line, ColorScheme scheme) => switch (line.kind) {
-    'inbound_credit' => (Icons.south_west_rounded, Brand.green),
-    'referral_reward' => (Icons.card_giftcard_rounded, Brand.green),
-    'cashback' => (Icons.savings_rounded, Brand.green),
-    'p2p_in' => (Icons.bolt_rounded, Brand.green),
-    'p2p_out' => (Icons.bolt_rounded, Brand.deepGreen),
+    'inbound_credit' => (Icons.south_west_rounded, Brand.blue),
+    'referral_reward' => (Icons.card_giftcard_rounded, Brand.blue),
+    'cashback' => (Icons.savings_rounded, Brand.blue),
+    'p2p_in' => (Icons.bolt_rounded, Brand.blue),
+    'p2p_out' => (Icons.bolt_rounded, Brand.navy),
     'transfer_refund' || 'bill_refund' => (Icons.replay_rounded, Brand.warning),
     'bill_payment' => (_billIcon(line.description), const Color(0xFF2563EB)),
     _ => (Icons.north_east_rounded, scheme.onSurfaceVariant),
@@ -75,7 +75,7 @@ class TransactionTile extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               '${incoming ? '+' : '−'}${formatNaira(line.amount.abs())}',
-              style: theme.textTheme.titleSmall?.copyWith(color: incoming ? Brand.green : theme.colorScheme.onSurface),
+              style: theme.textTheme.titleSmall?.copyWith(color: incoming ? Brand.blue : theme.colorScheme.onSurface),
             ),
           ],
         ),

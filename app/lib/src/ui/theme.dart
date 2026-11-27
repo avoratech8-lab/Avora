@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
 
-/// Avora's look: brand green, Manrope type, soft rounded surfaces.
+/// Avora's look: the logo's blue and navy with an orange accent, Manrope type, soft rounded surfaces.
 abstract final class Brand {
-  static const green = Color(0xFF0B6E4F);
-  static const deepGreen = Color(0xFF053D2C);
-  static const mint = Color(0xFF3DDC97);
-  static const lime = Color(0xFFC8F169);
+  static const blue = Color(0xFF0A58DD);
+  static const navy = Color(0xFF071A52);
+  static const sky = Color(0xFF7CB8FF);
+  static const orange = Color(0xFFFF8A1F);
+
+  /// Orange light enough for text on the blue gradient.
+  static const peach = Color(0xFFFFB566);
+
+  /// A soft orange for highlight cards with navy text. Solid, so it reads the same in dark mode.
+  static const cream = Color(0xFFFFDDBA);
+
   static const danger = Color(0xFFD64545);
   static const warning = Color(0xFFE8A317);
 
   static const cardGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF0E8A63), green, deepGreen],
+    colors: [Color(0xFF1C7BF2), blue, navy],
   );
 }
 
@@ -31,14 +38,14 @@ TextStyle _w(double size, double weight, {double? height, double spacing = 0}) =
 ThemeData buildTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
-    seedColor: Brand.green,
+    seedColor: Brand.blue,
     brightness: brightness,
-    primary: dark ? Brand.mint : Brand.green,
-    onPrimary: dark ? Brand.deepGreen : Colors.white,
+    primary: dark ? Brand.sky : Brand.blue,
+    onPrimary: dark ? Brand.navy : Colors.white,
     error: Brand.danger,
-    surface: dark ? const Color(0xFF0F1513) : Colors.white,
+    surface: dark ? const Color(0xFF0E1420) : Colors.white,
   );
-  final background = dark ? const Color(0xFF080C0B) : const Color(0xFFF4F7F5);
+  final background = dark ? const Color(0xFF070B14) : const Color(0xFFF4F6FA);
   final textTheme = TextTheme(
     displaySmall: _w(36, 800, spacing: -1),
     headlineMedium: _w(28, 800, spacing: -0.5),
@@ -93,7 +100,7 @@ ThemeData buildTheme(Brightness brightness) {
     textButtonTheme: TextButtonThemeData(style: TextButton.styleFrom(textStyle: textTheme.labelLarge)),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: dark ? const Color(0xFF17201D) : const Color(0xFFF0F3F1),
+      fillColor: dark ? const Color(0xFF161E2E) : const Color(0xFFEFF2F7),
       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
       border: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide.none),
       enabledBorder: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide.none),
