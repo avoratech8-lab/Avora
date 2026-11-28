@@ -169,8 +169,8 @@ class _SplitTile extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 20,
-                      backgroundColor: Brand.green.withValues(alpha: 0.12),
-                      child: const Icon(Icons.call_split_rounded, color: Brand.green, size: 20),
+                      backgroundColor: Brand.blue.withValues(alpha: 0.12),
+                      child: const Icon(Icons.call_split_rounded, color: Brand.blue, size: 20),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -193,7 +193,7 @@ class _SplitTile extends StatelessWidget {
                     child: LinearProgressIndicator(
                       value: s.asked == 0 ? 0 : s.collected / s.asked,
                       minHeight: 6,
-                      color: Brand.green,
+                      color: Brand.blue,
                       backgroundColor: theme.colorScheme.surfaceContainerHighest,
                     ),
                   ),
@@ -217,7 +217,7 @@ class _StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (text, color) = switch (status) {
-      ShareStatus.paid => ('Paid', Brand.green),
+      ShareStatus.paid => ('Paid', Brand.blue),
       ShareStatus.declined => ('Declined', Brand.danger),
       ShareStatus.pending => (_short(amount), Brand.warning),
     };
@@ -345,7 +345,7 @@ class _SplitScreenState extends State<SplitScreen> {
                             child: LinearProgressIndicator(
                               value: s.asked == 0 ? 0 : s.collected / s.asked,
                               minHeight: 8,
-                              color: Brand.lime,
+                              color: Brand.orange,
                               backgroundColor: Colors.white24,
                             ),
                           ),
@@ -353,7 +353,7 @@ class _SplitScreenState extends State<SplitScreen> {
                             const SizedBox(height: 8),
                             Text(
                               'Your part: ${_short(yourPart)}',
-                              style: theme.textTheme.bodySmall?.copyWith(color: Brand.lime),
+                              style: theme.textTheme.bodySmall?.copyWith(color: Brand.peach),
                             ),
                           ],
                         ] else
@@ -391,7 +391,7 @@ class _SplitScreenState extends State<SplitScreen> {
                             },
                             size: 20,
                             color: switch (x.status) {
-                              ShareStatus.paid => Brand.green,
+                              ShareStatus.paid => Brand.blue,
                               ShareStatus.declined => Brand.danger,
                               ShareStatus.pending => Brand.warning,
                             },
@@ -636,7 +636,7 @@ class _NewSplitScreenState extends State<NewSplitScreen> {
                       margin: const EdgeInsets.only(top: 8),
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: (over ? Brand.danger : Brand.lime).withValues(alpha: over ? 0.12 : 0.35),
+                        color: (over ? Brand.danger : Brand.orange).withValues(alpha: over ? 0.12 : 0.35),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Text(
@@ -644,7 +644,7 @@ class _NewSplitScreenState extends State<NewSplitScreen> {
                             ? 'The shares come to ${formatNaira(asked)}, more than the bill.'
                             : 'You cover ${formatNaira(total - asked)}. Everyone gets a request they can pay in one tap.',
                         key: const Key('split-summary'),
-                        style: theme.textTheme.bodyMedium?.copyWith(color: over ? Brand.danger : Brand.deepGreen),
+                        style: theme.textTheme.bodyMedium?.copyWith(color: over ? Brand.danger : Brand.navy),
                       ),
                     ),
                 ],

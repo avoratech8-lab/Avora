@@ -13,7 +13,7 @@ class WelcomeScreen extends StatelessWidget {
     final theme = Theme.of(context);
     void start() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PhoneScreen()));
     return Scaffold(
-      backgroundColor: Brand.deepGreen,
+      backgroundColor: Brand.navy,
       body: Container(
         decoration: const BoxDecoration(gradient: Brand.cardGradient),
         child: SafeArea(
@@ -22,13 +22,7 @@ class WelcomeScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const LogoMark(size: 40, light: true),
-                    const SizedBox(width: 10),
-                    Text('avora', style: theme.textTheme.titleLarge?.copyWith(color: Colors.white)),
-                  ],
-                ),
+                const Wordmark(height: 44),
                 const Spacer(),
                 Text(
                   'Money that\nnever gets lost.',
@@ -47,7 +41,7 @@ class WelcomeScreen extends StatelessWidget {
                 const Spacer(),
                 FilledButton(
                   key: const Key('get-started'),
-                  style: FilledButton.styleFrom(backgroundColor: Brand.lime, foregroundColor: Brand.deepGreen),
+                  style: FilledButton.styleFrom(backgroundColor: Brand.orange, foregroundColor: Brand.navy),
                   onPressed: start,
                   child: const Text('Open a free account'),
                 ),
@@ -88,7 +82,7 @@ class _Perk extends StatelessWidget {
               color: Colors.white.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(11),
             ),
-            child: Icon(icon, color: Brand.lime, size: 20),
+            child: Icon(icon, color: Brand.orange, size: 20),
           ),
           const SizedBox(width: 14),
           Expanded(

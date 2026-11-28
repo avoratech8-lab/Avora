@@ -101,7 +101,7 @@ class _HelpCentreScreenState extends State<HelpCentreScreen> {
             decoration: BoxDecoration(gradient: Brand.cardGradient, borderRadius: BorderRadius.circular(22)),
             child: Row(
               children: [
-                const Icon(Icons.support_agent_rounded, color: Brand.lime, size: 32),
+                const Icon(Icons.support_agent_rounded, color: Brand.orange, size: 32),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
@@ -112,8 +112,8 @@ class _HelpCentreScreenState extends State<HelpCentreScreen> {
                 FilledButton(
                   key: const Key('open-chat'),
                   style: FilledButton.styleFrom(
-                    backgroundColor: Brand.lime,
-                    foregroundColor: Brand.deepGreen,
+                    backgroundColor: Brand.orange,
+                    foregroundColor: Brand.navy,
                     minimumSize: const Size(88, 48),
                   ),
                   onPressed: () =>
@@ -204,7 +204,7 @@ class _SupportChatScreenState extends State<SupportChatScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Avora support', style: theme.textTheme.titleSmall),
-                Text('Replies in minutes', style: theme.textTheme.bodySmall?.copyWith(color: Brand.green)),
+                Text('Replies in minutes', style: theme.textTheme.bodySmall?.copyWith(color: Brand.blue)),
               ],
             ),
           ],
@@ -290,7 +290,7 @@ class _Bubble extends StatelessWidget {
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
         decoration: BoxDecoration(
-          color: mine ? Brand.green : theme.colorScheme.surfaceContainerHighest,
+          color: mine ? Brand.blue : theme.colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
             topRight: const Radius.circular(18),
@@ -301,8 +301,7 @@ class _Bubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (sender == 'agent')
-              Text('Support team', style: theme.textTheme.labelSmall?.copyWith(color: Brand.green)),
+            if (sender == 'agent') Text('Support team', style: theme.textTheme.labelSmall?.copyWith(color: Brand.blue)),
             Text(body, style: theme.textTheme.bodyMedium?.copyWith(color: mine ? Colors.white : null)),
             if (at != null)
               Align(

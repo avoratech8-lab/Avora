@@ -105,11 +105,8 @@ class SavingsTabState extends State<SavingsTab> {
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: Brand.lime, borderRadius: BorderRadius.circular(20)),
-                        child: Text(
-                          'Interest-free',
-                          style: theme.textTheme.labelSmall?.copyWith(color: Brand.deepGreen),
-                        ),
+                        decoration: BoxDecoration(color: Brand.orange, borderRadius: BorderRadius.circular(20)),
+                        child: Text('Interest-free', style: theme.textTheme.labelSmall?.copyWith(color: Brand.navy)),
                       ),
                     ],
                   ),
@@ -122,7 +119,7 @@ class SavingsTabState extends State<SavingsTab> {
                   const SizedBox(height: 6),
                   Text(
                     'Profit share earned: ${formatNaira(profit)}',
-                    style: theme.textTheme.bodyMedium?.copyWith(color: Brand.lime),
+                    style: theme.textTheme.bodyMedium?.copyWith(color: Brand.peach),
                   ),
                 ],
               ),
@@ -608,7 +605,7 @@ class _PotScreenState extends State<PotScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(locked ? Icons.lock_rounded : Icons.flag_rounded, color: Brand.lime, size: 18),
+                      Icon(locked ? Icons.lock_rounded : Icons.flag_rounded, color: Brand.orange, size: 18),
                       const SizedBox(width: 6),
                       Text(
                         locked ? 'Locked plan · ${termLabel(p.lockDays)}' : 'Goal',
@@ -629,7 +626,7 @@ class _PotScreenState extends State<PotScreen> {
                       child: LinearProgressIndicator(
                         value: p.progress,
                         minHeight: 10,
-                        color: Brand.lime,
+                        color: Brand.orange,
                         backgroundColor: Colors.white.withValues(alpha: 0.2),
                       ),
                     ),

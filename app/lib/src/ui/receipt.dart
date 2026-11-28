@@ -42,7 +42,7 @@ class ReceiptView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (color, icon) = switch (tone) {
-      ReceiptTone.good => (Brand.green, Icons.check_rounded),
+      ReceiptTone.good => (Brand.blue, Icons.check_rounded),
       ReceiptTone.bad => (Brand.warning, Icons.replay_rounded),
       ReceiptTone.warn => (Brand.warning, Icons.support_agent_rounded),
       ReceiptTone.pending => (theme.colorScheme.primary, Icons.schedule_rounded),
@@ -168,7 +168,7 @@ class _Highlight extends StatelessWidget {
     final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Brand.lime.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(18)),
+      decoration: BoxDecoration(color: Brand.orange.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(18)),
       child: Column(
         children: [
           Text(label, style: theme.textTheme.labelMedium),

@@ -12,7 +12,7 @@ import '../ui/widgets.dart';
 /// How a spending category looks: its name, icon and colour.
 (String, IconData, Color) categoryLook(String c) => switch (c) {
   'transfers' => ('Bank transfers', Icons.account_balance_outlined, const Color(0xFF2563EB)),
-  'avora' => ('Avora transfers', Icons.bolt_rounded, Brand.green),
+  'avora' => ('Avora transfers', Icons.bolt_rounded, Brand.blue),
   'cards' => ('Card payments', Icons.credit_card_rounded, const Color(0xFF0F766E)),
   'airtime' => ('Airtime', Icons.phone_android_rounded, const Color(0xFFE8A317)),
   'data' => ('Data', Icons.wifi_rounded, const Color(0xFF7C3AED)),
@@ -21,7 +21,7 @@ import '../ui/widgets.dart';
   'internet' => ('Internet', Icons.router_rounded, const Color(0xFF0891B2)),
   'education' => ('Exam PINs', Icons.school_rounded, const Color(0xFF4F46E5)),
   'betting' => ('Betting', Icons.sports_soccer_rounded, const Color(0xFFD64545)),
-  allSpending => ('All spending', Icons.pie_chart_outline_rounded, Brand.green),
+  allSpending => ('All spending', Icons.pie_chart_outline_rounded, Brand.blue),
   _ => ('Other', Icons.more_horiz_rounded, const Color(0xFF64748B)),
 };
 
@@ -252,7 +252,7 @@ class _Summary extends StatelessWidget {
               children: [
                 Icon(
                   diff <= 0 ? Icons.trending_down_rounded : Icons.trending_up_rounded,
-                  color: diff <= 0 ? Brand.lime : const Color(0xFFFFC9A8),
+                  color: diff <= 0 ? Brand.sky : const Color(0xFFFFC9A8),
                   size: 18,
                 ),
                 const SizedBox(width: 6),
@@ -278,9 +278,7 @@ class _Summary extends StatelessWidget {
                   Text(
                     left >= 0 ? '${_short(left)} left' : '${_short(-left)} over',
                     key: const Key('budget-left'),
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      color: left >= 0 ? Brand.lime : const Color(0xFFFFC9A8),
-                    ),
+                    style: theme.textTheme.titleSmall?.copyWith(color: left >= 0 ? Brand.sky : const Color(0xFFFFC9A8)),
                   ),
                 ],
               ),
@@ -302,7 +300,7 @@ class _Summary extends StatelessWidget {
   }
 }
 
-/// A budget bar: green, amber from 80%, red past 100%.
+/// A budget bar: blue, amber from 80%, red past 100%.
 class _Meter extends StatelessWidget {
   const _Meter({required this.spent, required this.budget, this.onDark = false});
 
@@ -317,7 +315,7 @@ class _Meter extends StatelessWidget {
         ? Brand.danger
         : share >= 0.8
         ? Brand.warning
-        : (onDark ? Brand.lime : Brand.green);
+        : (onDark ? Brand.sky : Brand.blue);
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: LinearProgressIndicator(
@@ -402,7 +400,7 @@ class _BarsPainter extends CustomPainter {
         ..color = future
             ? faint.withValues(alpha: 0.5)
             : d + 1 == today
-            ? Brand.lime
+            ? Brand.orange
             : days[d] == 0
             ? faint
             : bar;

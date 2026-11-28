@@ -200,12 +200,12 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   '${upcoming.length} active · free, and under your daily limit',
-                                  style: theme.textTheme.bodySmall?.copyWith(color: Brand.lime),
+                                  style: theme.textTheme.bodySmall?.copyWith(color: Brand.peach),
                                 ),
                               ],
                             ),
                           ),
-                          const Icon(Icons.event_repeat_rounded, color: Brand.lime, size: 40),
+                          const Icon(Icons.event_repeat_rounded, color: Brand.orange, size: 40),
                         ],
                       ),
                     ),
@@ -251,7 +251,7 @@ class _ScheduleTile extends StatelessWidget {
     final (chip, chipColor) = switch (s.status) {
       ScheduleStatus.paused => ('Paused', Brand.warning),
       ScheduleStatus.done => ('Finished', theme.colorScheme.onSurfaceVariant),
-      _ => (s.frequency.label, Brand.green),
+      _ => (s.frequency.label, Brand.blue),
     };
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -271,8 +271,8 @@ class _ScheduleTile extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 20,
-                      backgroundColor: Brand.green.withValues(alpha: s.done ? 0.06 : 0.12),
-                      child: Icon(scheduleIcon(s.kind), color: Brand.green, size: 20),
+                      backgroundColor: Brand.blue.withValues(alpha: s.done ? 0.06 : 0.12),
+                      child: Icon(scheduleIcon(s.kind), color: Brand.blue, size: 20),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -328,7 +328,7 @@ class _ScheduleTile extends StatelessWidget {
                       Icon(
                         s.lastOk! ? Icons.check_circle_rounded : Icons.error_outline_rounded,
                         size: 15,
-                        color: s.lastOk! ? Brand.green : Brand.danger,
+                        color: s.lastOk! ? Brand.blue : Brand.danger,
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -617,10 +617,7 @@ class _NewScheduleScreenState extends State<NewScheduleScreen> {
                   if (amount != null)
                     Container(
                       padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Brand.lime.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                      decoration: BoxDecoration(color: Brand.cream, borderRadius: BorderRadius.circular(16)),
                       child: Text(
                         _frequency == Frequency.once
                             ? '${_short(amount)} on ${formatDate(start)}.'
@@ -628,7 +625,7 @@ class _NewScheduleScreenState extends State<NewScheduleScreen> {
                                   '${[for (var i = 0; i < 3; i++) formatDate(_frequency.at(start, i))].join(', ')} '
                                   'and on. Pause or delete it any time.',
                         key: const Key('schedule-preview'),
-                        style: theme.textTheme.bodyMedium?.copyWith(color: Brand.deepGreen),
+                        style: theme.textTheme.bodyMedium?.copyWith(color: Brand.navy),
                       ),
                     ),
                 ],

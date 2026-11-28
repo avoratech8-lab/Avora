@@ -240,7 +240,7 @@ Future<void> _pickTheme(BuildContext context) async {
               key: Key('theme-${mode.name}'),
               leading: Icon(icon),
               title: Text(label),
-              trailing: mode == prefs.theme ? const Icon(Icons.check_rounded, color: Brand.green) : null,
+              trailing: mode == prefs.theme ? const Icon(Icons.check_rounded, color: Brand.blue) : null,
               onTap: () => Navigator.pop(c, mode),
             ),
         ],

@@ -241,7 +241,7 @@ class _BalanceCard extends StatelessWidget {
       decoration: BoxDecoration(
         gradient: Brand.cardGradient,
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [BoxShadow(color: Brand.green.withValues(alpha: 0.3), blurRadius: 24, offset: const Offset(0, 10))],
+        boxShadow: [BoxShadow(color: Brand.blue.withValues(alpha: 0.3), blurRadius: 24, offset: const Offset(0, 10))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -337,9 +337,9 @@ class _CardButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = filled ? Brand.deepGreen : Colors.white;
+    final fg = filled ? Brand.navy : Colors.white;
     return Material(
-      color: filled ? Brand.lime : Colors.white.withValues(alpha: 0.14),
+      color: filled ? Brand.orange : Colors.white.withValues(alpha: 0.14),
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
@@ -431,7 +431,7 @@ class _ClaimTag extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Material(
-      color: Brand.lime.withValues(alpha: 0.35),
+      color: Brand.cream,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         key: const Key('claim-tag'),
@@ -441,21 +441,21 @@ class _ClaimTag extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              const Icon(Icons.alternate_email_rounded, color: Brand.deepGreen, size: 30),
+              const Icon(Icons.alternate_email_rounded, color: Brand.navy, size: 30),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Claim your @tag', style: theme.textTheme.titleSmall?.copyWith(color: Brand.deepGreen)),
+                    Text('Claim your @tag', style: theme.textTheme.titleSmall?.copyWith(color: Brand.navy)),
                     Text(
                       'Get paid free and instantly by anyone on Avora, no account number needed.',
-                      style: theme.textTheme.bodySmall?.copyWith(color: Brand.deepGreen),
+                      style: theme.textTheme.bodySmall?.copyWith(color: Brand.navy),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: Brand.deepGreen),
+              const Icon(Icons.chevron_right_rounded, color: Brand.navy),
             ],
           ),
         ),
@@ -531,7 +531,7 @@ class _PromoCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Brand.lime.withValues(alpha: theme.brightness == Brightness.dark ? 0.15 : 0.45),
+        color: Brand.orange.withValues(alpha: theme.brightness == Brightness.dark ? 0.15 : 0.45),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(

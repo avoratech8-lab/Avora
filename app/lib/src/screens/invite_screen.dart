@@ -81,7 +81,7 @@ class _InviteScreenState extends State<InviteScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.card_giftcard_rounded, color: Brand.lime, size: 36),
+                      const Icon(Icons.card_giftcard_rounded, color: Brand.orange, size: 36),
                       const SizedBox(height: 12),
                       Text(
                         'Get ${formatNaira(s.reward)} for every friend',
@@ -127,8 +127,8 @@ class _InviteScreenState extends State<InviteScreen> {
                         child: FilledButton.icon(
                           key: const Key('invite-share'),
                           style: FilledButton.styleFrom(
-                            backgroundColor: Brand.lime,
-                            foregroundColor: Brand.deepGreen,
+                            backgroundColor: Brand.orange,
+                            foregroundColor: Brand.navy,
                             minimumSize: const Size.fromHeight(52),
                           ),
                           onPressed: () => SharePlus.instance.share(
@@ -159,7 +159,7 @@ class _InviteScreenState extends State<InviteScreen> {
                 if (s.joinedWith.isNotEmpty)
                   ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.how_to_reg_rounded, color: Brand.green),
+                    leading: const Icon(Icons.how_to_reg_rounded, color: Brand.blue),
                     title: Text('You joined with ${s.joinedWith}', style: theme.textTheme.titleSmall),
                   )
                 else if (s.canAddCode) ...[

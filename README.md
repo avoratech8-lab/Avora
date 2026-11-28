@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/avora-logo-white.png">
+    <img src="docs/brand/avora-logo.png" alt="Avora: Bank Smarter. Live Better." width="420">
+  </picture>
+</p>
+
 # Avora
 
 A Nigerian money app built on one promise: your money never gets lost. Transfers that don't go through are refunded automatically, and every fee is shown before you pay.
