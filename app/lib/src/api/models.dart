@@ -987,3 +987,105 @@ class SplitBill {
 
   int get pendingCount => shares.where((s) => s.status == ShareStatus.pending).length;
 }
+
+/// An account statement for whole days, both included.
+class PeriodStatement {
+  PeriodStatement({
+    required this.accountName,
+    required this.accountNumber,
+    required this.from,
+    required this.to,
+    required this.openingBalance,
+    required this.moneyIn,
+    required this.moneyOut,
+    required this.closingBalance,
+    required this.lines,
+    this.truncated = false,
+  });
+
+  factory PeriodStatement.fromJson(Map<String, dynamic> j) => PeriodStatement(
+    accountName: j['account_name'] as String? ?? '',
+    accountNumber: j['account_number'] as String,
+    from: DateTime.parse(j['from'] as String),
+    to: DateTime.parse(j['to'] as String),
+    openingBalance: j['opening_balance'] as int,
+    moneyIn: j['money_in'] as int,
+    moneyOut: j['money_out'] as int,
+    closingBalance: j['closing_balance'] as int,
+    lines: [for (final l in j['lines'] as List) StatementLine.fromJson(l as Map<String, dynamic>)],
+    truncated: j['truncated'] as bool? ?? false,
+  );
+
+  final String accountName;
+  final String accountNumber;
+  final DateTime from; // a date, no time
+  final DateTime to;
+  final int openingBalance;
+  final int moneyIn;
+  final int moneyOut;
+  final int closingBalance;
+  final List<StatementLine> lines; // oldest first
+  final bool truncated;
+}
+
+/// What went wrong with a payment, as the customer picks it.
+enum ProblemReason {
+  notReceived('not_received', "The money didn't arrive"),
+  wrongAmount('wrong_amount', 'The amount is wrong'),
+  notMe('not_me', "I didn't make this payment"),
+  chargedTwice('charged_twice', 'I was charged twice'),
+  other('other', 'Something else');
+
+  const ProblemReason(this.code, this.label);
+
+  final String code;
+  final String label;
+
+  static ProblemReason parse(String code) => values.firstWhere((r) => r.code == code, orElse: () => other);
+}
+
+enum ProblemStatus { open, resolved, rejected }
+
+/// A report of a problem with a payment, and the answer once there is one.
+class ProblemReport {
+  ProblemReport({
+    required this.id,
+    required this.ref,
+    required this.description,
+    required this.amount,
+    required this.reason,
+    required this.details,
+    required this.status,
+    required this.answer,
+    required this.createdAt,
+    this.closedAt,
+  });
+
+  factory ProblemReport.fromJson(Map<String, dynamic> j) => ProblemReport(
+    id: j['id'] as String,
+    ref: j['ref'] as String,
+    description: j['description'] as String,
+    amount: j['amount'] as int,
+    reason: ProblemReason.parse(j['reason'] as String),
+    details: j['details'] as String? ?? '',
+    status: switch (j['status']) {
+      'resolved' => ProblemStatus.resolved,
+      'rejected' => ProblemStatus.rejected,
+      _ => ProblemStatus.open,
+    },
+    answer: j['answer'] as String? ?? '',
+    createdAt: DateTime.parse(j['created_at'] as String),
+    closedAt: j['closed_at'] == null ? null : DateTime.parse(j['closed_at'] as String),
+  );
+
+  final String id;
+  final String ref; // the payment's id
+  final String description;
+  final int amount; // as on the statement: negative is money out
+  final ProblemReason reason;
+  final String details;
+  final ProblemStatus status;
+  final String answer;
+  final DateTime createdAt;
+  final DateTime? closedAt;
+}

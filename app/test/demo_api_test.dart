@@ -517,4 +517,61 @@ void main() {
     expect((await api.wallet()).balance, DemoAvoraApi.welcomeCredit - 250000 + 600000);
     expect((await api.notifications()).$1.first.kind, 'split');
   });
+
+  test('a frozen account refuses payments until the PIN unfreezes it; money still comes in', () async {
+    await api.freeze();
+    expect(await api.frozen(), isTrue);
+    await expectLater(
+      send('0123456781', 100000),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'account_frozen')),
+    );
+    await expectLater(
+      api.sendToAvora(to: '@tolu', amount: 100, note: '', pin: '135790', idempotencyKey: 'p'),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'account_frozen')),
+    );
+    final card = await api.createCard('Online');
+    final declined = await api.testCardPayment(card.id, merchant: 'Jumia', amount: 1000, key: 'k');
+    expect((declined.approved, declined.declineReason), (false, 'account frozen'));
+
+    await expectLater(api.unfreeze('000000'), throwsA(isA<ApiException>().having((e) => e.code, 'code', 'wrong_pin')));
+    await api.unfreeze('135790');
+    expect(await api.frozen(), isFalse);
+    expect((await send('0123456781', 100000)).status, TransferStatus.delivered);
+    final titles = (await api.notifications()).$1.map((n) => n.title);
+    expect(titles, containsAll(['Account frozen', 'Account unfrozen']));
+  });
+
+  test('a statement for a period has opening and closing balances', () async {
+    now = DateTime(2026, 11, 2, 9);
+    await send('0123456781', 100000, key: 'nov');
+    final oct = await api.periodStatement(from: DateTime(2026, 10, 1), to: DateTime(2026, 10, 31));
+    expect((oct.openingBalance, oct.moneyIn, oct.moneyOut), (0, DemoAvoraApi.welcomeCredit, 0));
+    expect(oct.closingBalance, DemoAvoraApi.welcomeCredit);
+
+    final nov = await api.periodStatement(from: DateTime(2026, 11, 1), to: DateTime(2026, 11, 30));
+    expect(nov.openingBalance, DemoAvoraApi.welcomeCredit);
+    expect(nov.moneyOut, 100000);
+    expect(nov.closingBalance, (await api.wallet()).balance);
+    expect(nov.lines.single.kind, 'transfer_hold');
+  });
+
+  test('report a problem with a payment, once while it is open', () async {
+    final t = await send('0123456781', 100000);
+    await expectLater(
+      api.reportProblem(ref: t.id, reason: ProblemReason.other),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'invalid_request')),
+    );
+    final r = await api.reportProblem(ref: t.id, reason: ProblemReason.notReceived, details: 'Mum says no');
+    expect((r.status, r.amount, r.reason), (ProblemStatus.open, -100000, ProblemReason.notReceived));
+    await expectLater(
+      api.reportProblem(ref: t.id, reason: ProblemReason.wrongAmount),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'dispute_open')),
+    );
+    await expectLater(
+      api.reportProblem(ref: 'nope', reason: ProblemReason.notMe),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'not_found')),
+    );
+    expect((await api.problemReports()).single.id, r.id);
+    expect((await api.notifications()).$1.first.title, "We're looking into it");
+  });
 }

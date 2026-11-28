@@ -120,6 +120,8 @@ void main() {
     await tester.tap(find.text('Me'));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.byKey(const Key('sign-out')), 200, scrollable: find.byType(Scrollable).last);
+    await tester.ensureVisible(find.byKey(const Key('sign-out')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sign-out')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-sign-out')));
@@ -782,5 +784,83 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('₦0 of ₦6,000 back'), findsOneWidget);
     expect((await api.splits()).first.title, 'Dinner');
+  });
+
+  testWidgets('freeze the account from Me, see a payment refused, unfreeze with the PIN', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await openMe(tester, const Key('me-freeze'));
+    expect(find.text('Your account is open'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('freeze')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-freeze')));
+    await tester.pumpAndSettle();
+    expect(find.text('Your account is frozen'), findsOneWidget);
+    expect(await api.frozen(), isTrue);
+
+    await tester.tap(find.byKey(const Key('unfreeze')));
+    await tester.pumpAndSettle();
+    await typeOnPad(tester, '135790');
+    expect(find.text('Your account is open'), findsOneWidget);
+    expect(await api.frozen(), isFalse);
+  });
+
+  testWidgets('statements show this month and last month', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await openMe(tester, const Key('statements'));
+    expect(find.text('Closing balance'), findsOneWidget);
+    expect(find.text('₦50,000.00'), findsWidgets);
+    expect(find.text('1 transactions'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('period-lastMonth')));
+    await tester.pumpAndSettle();
+    expect(find.text('Nothing moved in these dates.'), findsOneWidget);
+  });
+
+  testWidgets('report a problem from a receipt and see it under My reports', (tester) async {
+    final (api, creds, recipients) = await demo();
+    await signedIn(api);
+    await api.send(
+      bankCode: '058',
+      accountNumber: '0123456781',
+      amount: 150000,
+      narration: '',
+      pin: '135790',
+      idempotencyKey: 'x',
+    );
+    await tester.pumpWidget(AvoraApp(api: api, credentials: creds, recipients: recipients));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Activity'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('DEMO USER 6781').first);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('report-problem')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byKey(const Key('report-problem')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reason-not_received')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('problem-details')), 'Mum says nothing came');
+    await tester.tap(find.byKey(const Key('send-report')));
+    await tester.pumpAndSettle();
+    expect(find.text("Report sent. We'll reply in your notifications."), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5)); // let the message go
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('done')));
+    await tester.pumpAndSettle();
+    await openMe(tester, const Key('my-reports'));
+    expect(find.text('Looking into it'), findsOneWidget);
+    expect(find.text('Mum says nothing came'), findsOneWidget);
   });
 }

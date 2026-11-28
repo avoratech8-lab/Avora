@@ -20,6 +20,7 @@ import (
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
 	"avora/backend/internal/cards"
+	"avora/backend/internal/disputes"
 	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
 	"avora/backend/internal/ledger"
@@ -101,6 +102,7 @@ func run(log *slog.Logger) error {
 		Insights:      insights.NewService(pool),
 		Schedules:     schedules.NewService(pool),
 		Splits:        splits.NewService(pool),
+		Disputes:      disputes.NewService(pool),
 		Cards:         cards.NewService(pool, sys, []byte(authSecret)),
 		Sandbox:       os.Getenv("SANDBOX") != "off",
 		Auth:          authSvc,

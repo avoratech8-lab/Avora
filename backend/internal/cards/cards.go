@@ -298,6 +298,16 @@ func (s *Service) Charge(ctx context.Context, cardID, key, merchant string, amou
 	case Terminated:
 		reason = "card terminated"
 	}
+	if reason == "" {
+		var frozen bool
+		if err := tx.QueryRow(ctx, `select frozen_at is not null from users where wallet_account_id = $1`,
+			c.WalletID).Scan(&frozen); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Payment{}, err
+		}
+		if frozen {
+			reason = "account frozen"
+		}
+	}
 	if reason == "" && c.MonthlyLimit > 0 {
 		var spent int64
 		if err := tx.QueryRow(ctx, `select coalesce(sum(amount), 0) from card_payments
@@ -385,6 +395,7 @@ func (s *Service) tell(ctx context.Context, db ledger.DB, wallet int64, merchant
 		"card terminated":    "That card is closed.",
 		"over monthly limit": "It would take the card over its monthly limit. You can raise the limit in Cards.",
 		"insufficient funds": "Your balance was too low. Add money and try again.",
+		"account frozen":     "Your account is frozen, so no money can leave it. Unfreeze it under Me → Security if this was you.",
 	}[reason]
 	return notify.Add(ctx, db, wallet, "card", fmt.Sprintf("Card payment of %s declined", notify.Naira(amount)),
 		fmt.Sprintf("At %s. %s", merchant, why), id)

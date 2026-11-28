@@ -29,6 +29,7 @@ import (
 	"avora/backend/internal/auth"
 	"avora/backend/internal/bills"
 	"avora/backend/internal/cards"
+	"avora/backend/internal/disputes"
 	"avora/backend/internal/inbound"
 	"avora/backend/internal/insights"
 	"avora/backend/internal/kyc"
@@ -59,6 +60,7 @@ type Server struct {
 	Cards     *cards.Service
 	Schedules *schedules.Service
 	Splits    *splits.Service
+	Disputes  *disputes.Service
 	// Sandbox turns on test-only routes, such as making a card payment.
 	Sandbox       bool
 	Support       *support.Service
@@ -86,6 +88,13 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /v1/me/wallet", s.signedIn(s.myWallet))
 	mux.HandleFunc("GET /v1/me/statement", s.signedIn(s.statement))
+	mux.HandleFunc("GET /v1/me/statement/period", s.signedIn(s.periodStatement))
+	mux.HandleFunc("GET /v1/me/freeze", s.signedIn(s.freezeStatus))
+	mux.HandleFunc("POST /v1/me/freeze", s.signedIn(s.freeze))
+	mux.HandleFunc("POST /v1/me/unfreeze", s.signedIn(s.unfreeze))
+	mux.HandleFunc("GET /v1/disputes", s.signedIn(s.listDisputes))
+	mux.HandleFunc("POST /v1/disputes", s.signedIn(s.openDispute))
+	mux.HandleFunc("GET /v1/disputes/{id}", s.signedIn(s.getDispute))
 	mux.HandleFunc("POST /v1/me/pin", s.signedIn(s.changePIN))
 	mux.HandleFunc("POST /v1/me/pin/verify", s.signedIn(s.verifyPIN))
 	mux.HandleFunc("GET /v1/me/devices", s.signedIn(s.listDevices))
@@ -148,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/ops/transfers/{id}/resolve", s.opsOnly(s.resolveTransfer))
 	mux.HandleFunc("POST /v1/ops/savings/profit", s.opsOnly(s.shareProfit))
 	mux.HandleFunc("POST /v1/ops/support/{user_id}/reply", s.opsOnly(s.supportReply))
+	mux.HandleFunc("POST /v1/ops/disputes/{id}/close", s.opsOnly(s.closeDispute))
 	return mux
 }
 
@@ -246,33 +256,41 @@ func (s *Server) statement(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	// Avora-to-Avora lines say who the other person is, from each side.
-	if s.P2P != nil {
-		var ids []string
-		for _, l := range lines {
-			if l.Kind == "p2p" {
-				ids = append(ids, l.Ref)
-			}
-		}
-		names, err := s.P2P.Describe(r.Context(), principal(r).WalletID, ids)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		for i, l := range lines {
-			if l.Kind != "p2p" {
-				continue
-			}
-			lines[i].Kind = "p2p_out"
-			if l.Amount > 0 {
-				lines[i].Kind = "p2p_in"
-			}
-			if n, ok := names[l.Ref]; ok {
-				lines[i].Description = n
-			}
-		}
+	if err := s.nameP2P(r.Context(), principal(r).WalletID, lines); err != nil {
+		s.fail(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"lines": lines})
+}
+
+// nameP2P says who the other person is on Avora-to-Avora lines, from each side.
+func (s *Server) nameP2P(ctx context.Context, wallet int64, lines []ledger.StatementLine) error {
+	if s.P2P == nil {
+		return nil
+	}
+	var ids []string
+	for _, l := range lines {
+		if l.Kind == "p2p" {
+			ids = append(ids, l.Ref)
+		}
+	}
+	names, err := s.P2P.Describe(ctx, wallet, ids)
+	if err != nil {
+		return err
+	}
+	for i, l := range lines {
+		if l.Kind != "p2p" {
+			continue
+		}
+		lines[i].Kind = "p2p_out"
+		if l.Amount > 0 {
+			lines[i].Kind = "p2p_in"
+		}
+		if n, ok := names[l.Ref]; ok {
+			lines[i].Description = n
+		}
+	}
+	return nil
 }
 
 func (s *Server) nameEnquiry(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +372,16 @@ func (s *Server) spentSince(ctx context.Context, wallet int64, t time.Time) (int
 // dailyLimit refuses a payment that would take today's spending past the
 // customer's KYC tier limit.
 func (s *Server) dailyLimit(ctx context.Context, userID, wallet, amount int64) error {
+	if s.Auth != nil {
+		fz, err := s.Auth.Frozen(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if fz.Frozen {
+			return &limitError{"account_frozen",
+				"Your account is frozen, so no money can leave it. Unfreeze it with your PIN under Me → Security."}
+		}
+	}
 	if s.KYC == nil {
 		return nil
 	}
@@ -1131,6 +1159,14 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "code_too_late", "Invite codes can only be added in your first 30 days.")
 	case errors.Is(err, schedules.ErrNotFound):
 		writeError(w, http.StatusNotFound, "schedule_not_found", "We couldn't find that scheduled payment.")
+	case errors.Is(err, disputes.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "We couldn't find that payment or report.")
+	case errors.Is(err, disputes.ErrOpen):
+		writeError(w, http.StatusConflict, "dispute_open", "You've already reported this payment. We'll reply in your notifications.")
+	case errors.Is(err, disputes.ErrClosed):
+		writeError(w, http.StatusConflict, "dispute_closed", "That report has already been answered.")
+	case errors.Is(err, disputes.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request", friendly(err))
 	case errors.Is(err, splits.ErrNotFound):
 		writeError(w, http.StatusNotFound, "split_not_found", "We couldn't find that request.")
 	case errors.Is(err, splits.ErrSettled):

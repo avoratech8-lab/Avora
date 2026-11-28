@@ -200,6 +200,50 @@ func Statement(ctx context.Context, db DB, accountID int64, limit int) ([]Statem
 	return lines, err
 }
 
+// MaxPeriodLines caps how many lines StatementBetween returns.
+const MaxPeriodLines = 5000
+
+// StatementBetween returns the balance at [from] and the movements in
+// [from, to), oldest first. More reports there were more lines than
+// MaxPeriodLines; the opening balance still covers everything before [from].
+func StatementBetween(ctx context.Context, db DB, accountID int64, from, to time.Time) (opening int64, lines []StatementLine, more bool, err error) {
+	var kind Kind
+	var before int64
+	if err := db.QueryRow(ctx, `
+		select a.kind, coalesce((select sum(e.amount) from entries e where e.account_id = a.id and e.created_at < $2), 0)
+		from accounts a where a.id = $1`, accountID, from).Scan(&kind, &before); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil, false, fmt.Errorf("%w: %d", ErrUnknownAccount, accountID)
+		}
+		return 0, nil, false, err
+	}
+	rows, err := db.Query(ctx, `
+		select j.id, j.kind, j.description, j.ref, e.amount, e.created_at
+		from entries e join journals j on j.id = e.journal_id
+		where e.account_id = $1 and e.created_at >= $2 and e.created_at < $3
+		order by e.id
+		limit $4`, accountID, from, to, MaxPeriodLines+1)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	lines, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (StatementLine, error) {
+		var s StatementLine
+		err := r.Scan(&s.JournalID, &s.Kind, &s.Description, &s.Ref, &s.Amount, &s.At)
+		s.Amount = kind.toBalance(s.Amount)
+		return s, err
+	})
+	if err != nil {
+		return 0, nil, false, err
+	}
+	if len(lines) > MaxPeriodLines {
+		lines, more = lines[:MaxPeriodLines], true
+	}
+	if lines == nil {
+		lines = []StatementLine{}
+	}
+	return kind.toBalance(before), lines, more, nil
+}
+
 // Check verifies that all entries sum to zero and that every cached balance
 // matches its entries. Run it nightly and alert on any error.
 func Check(ctx context.Context, db DB) error {

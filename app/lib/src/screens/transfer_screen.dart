@@ -107,6 +107,8 @@ class _TransferScreenState extends State<TransferScreen> {
       note: t.sessionId.isEmpty
           ? null
           : 'If they say it has not arrived, share this receipt. Their bank can trace the session ID.',
+      problemRef: t.id,
+      problemWhat: '${formatNaira(t.amount)} to ${t.accountName}',
     );
   }
 }

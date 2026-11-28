@@ -6,6 +6,7 @@ import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'help_screens.dart';
 import 'profile_screen.dart';
+import 'protect_screens.dart';
 import 'invite_screen.dart';
 import 'limits_screen.dart';
 import 'schedule_screens.dart';
@@ -137,7 +138,12 @@ class ProfileTab extends StatelessWidget {
               key: const Key('personal'),
             ),
             _Item(Icons.speed_rounded, 'Limits', () => go(const LimitsScreen()), key: const Key('limits')),
-            _Item(Icons.description_outlined, 'Statements', () => soon('Statements', Icons.description_outlined)),
+            _Item(
+              Icons.description_outlined,
+              'Statements',
+              () => go(const StatementScreen()),
+              key: const Key('statements'),
+            ),
             _Item(
               Icons.card_giftcard_rounded,
               'Invite friends',
@@ -163,6 +169,12 @@ class ProfileTab extends StatelessWidget {
             ),
             _Item(Icons.password_rounded, 'Change PIN', () => go(const ChangePinScreen())),
             _Item(Icons.devices_rounded, 'Phones signed in', () => go(const DevicesScreen())),
+            _Item(
+              Icons.ac_unit_rounded,
+              'Freeze my account',
+              () => go(const FreezeScreen()),
+              key: const Key('me-freeze'),
+            ),
           ]),
           _Section('App', [
             _Item(Icons.dark_mode_outlined, 'Appearance', () => _pickTheme(context), key: const Key('appearance')),
@@ -179,6 +191,12 @@ class ProfileTab extends StatelessWidget {
               'Help centre',
               () => go(const HelpCentreScreen()),
               key: const Key('help'),
+            ),
+            _Item(
+              Icons.flag_outlined,
+              'My reports',
+              () => go(const ProblemReportsScreen()),
+              key: const Key('my-reports'),
             ),
             _Item(Icons.gavel_rounded, 'Terms and privacy', () => soon('Terms and privacy', Icons.gavel_rounded)),
           ]),
